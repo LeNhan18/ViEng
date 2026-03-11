@@ -1,34 +1,132 @@
-# ViEng
-## Chi Tiết Dự Án
-1. Mục Tiêu Tổng Thể
+# ViEng - Trợ lý luyện thi tiếng Anh AI cho sinh viên Việt Nam
 
-Xây dựng một ứng dụng web/mobile hỗ trợ sinh viên Việt Nam luyện thi TOEIC/IELTS một cách cá nhân hóa, sử dụng AI để tạo bài tập, phân tích lỗi sai, và cung cấp feedback tức thì.
-Kết hợp công nghệ chính:
-Fine-tuning LLM: Tinh chỉnh mô hình để "học" phong cách giải thích kiểu thầy cô Việt (thân thiện, gần gũi, dùng ví dụ đời thường), tạo bài test dựa trên level người dùng, và xử lý tiếng Việt tự nhiên.
-RAG: Tích hợp để truy xuất thông tin động từ nguồn uy tín (grammar rules, từ vựng, bài mẫu), đảm bảo câu trả lời chính xác, cập nhật (ví dụ: thay đổi format thi mới nhất từ ETS), và giảm hallucination (mô hình không bịa thông tin).
+## Giới thiệu
 
-Đối tượng người dùng: Sinh viên đại học (như ĐH Bách Khoa, Kinh Tế TP.HCM), người đi làm cần chứng chỉ tiếng Anh. Ước tính impact: Giúp 100-500 users beta test, cải thiện điểm thi 10-20% qua feedback cá nhân hóa.
-Lợi ích kinh doanh/thực tế: Miễn phí cơ bản, premium cho voice mode; có thể mở rộng thành startup hoặc contribute open-source để tăng visibility trên GitHub.
+ViEng là ứng dụng web hỗ trợ sinh viên Việt Nam luyện thi TOEIC/IELTS một cách cá nhân hóa, sử dụng AI để tạo bài tập, phân tích lỗi sai, và cung cấp feedback tức thì theo phong cách "thầy cô Việt".
 
-2. Tính Năng Chính
+### Tính năng chính
 
-Tạo bài test cá nhân hóa: User chọn kỹ năng (Listening, Reading, Speaking, Writing) và level (Beginner/Intermediate/Advanced). LLM generate questions dựa trên dataset fine-tune.
-Phân tích và giải thích lỗi: Sau khi user trả lời, mô hình kiểm tra và explain kiểu "Thầy cô Việt" (ví dụ: "Em sai ở phần này vì nhầm thì hiện tại hoàn thành với quá khứ đơn. Thầy ví dụ: 'I have eaten' nghĩa là...").
-RAG integration: Khi explain, pull từ knowledge base (grammar/from vựng từ British Council/IDP) để trích dẫn nguồn chính xác.
-Voice mode (optional nâng cao): Sử dụng Whisper để user luyện speaking/listening; LLM evaluate pronunciation, fluency, và gợi ý cải thiện.
-Tiến độ tracking: Dashboard theo dõi progress (điểm số, điểm yếu), gợi ý bài tập tiếp theo.
-An toàn & đạo đức: Không lưu dữ liệu cá nhân mà không có consent; sử dụng watermarking để tránh misuse.
+- **Tạo bài test cá nhân hóa**: Chọn kỹ năng (Listening, Reading, Speaking, Writing) và trình độ (Beginner/Intermediate/Advanced)
+- **Phân tích và giải thích lỗi**: Feedback chi tiết, thân thiện theo phong cách thầy cô Việt Nam
+- **RAG integration**: Trích dẫn nguồn uy tín (grammar rules, từ vựng) để đảm bảo chính xác
+- **Tiến độ tracking**: Dashboard theo dõi điểm số và điểm yếu
 
-3. Architecture Tổng Thể
+## Tech Stack
 
-Backend: Python với FastAPI/Flask cho API.
-LLM: Base model như Llama-3-8B hoặc Vietcuna-7B (fine-tune với LoRA để tiết kiệm GPU).
-RAG Pipeline: LangChain/LlamaIndex để build chain: Embed query → Retrieve từ vector DB (Chroma/FAISS) → Augment prompt cho LLM.
-Knowledge Base: Vector store chứa chunks từ crawl/scrape nguồn (British Council, Cambridge, ETS samples).
+| Thành phần | Công nghệ |
+|---|---|
+| Backend | Python 3.11 + FastAPI |
+| LLM | Groq (Llama-3.3-70B) / OpenAI (GPT-4o-mini) |
+| RAG | LangChain + ChromaDB |
+| Embeddings | sentence-transformers (multilingual) |
+| Frontend | Streamlit (prototype) |
+| Testing | pytest |
 
-Frontend: Streamlit/Gradio cho prototype web; nếu mobile, dùng React Native + API.
-Deployment: Heroku/Vercel miễn phí cho demo; AWS/GCP nếu scale.
-Data Flow Example:
-User hỏi: "Tạo bài test TOEIC Part 7 level B2."
-Fine-tuned LLM generate questions.
-User trả lời → RAG retrieve rules liên quan → LLM explain với style Việt.
+## Cấu trúc dự án
+
+```
+ViEng/
+├── app/
+│   ├── main.py              # FastAPI entry point
+│   ├── api/
+│   │   └── routes.py        # API endpoints
+│   ├── core/
+│   │   └── config.py        # Settings & environment
+│   ├── models/
+│   │   └── schemas.py       # Pydantic data models
+│   ├── services/
+│   │   ├── llm_service.py   # LLM integration (Groq/OpenAI)
+│   │   └── rag_service.py   # RAG pipeline (ChromaDB)
+│   └── utils/
+├── data/
+│   └── knowledge_base/      # Tài liệu grammar, từ vựng (.txt)
+├── tests/
+│   └── test_api.py
+├── .env.example
+├── .gitignore
+├── requirements.txt
+└── README.md
+```
+
+## Cài đặt
+
+### 1. Clone repo
+
+```bash
+git clone https://github.com/LeNhan18/ViEng.git
+cd ViEng
+```
+
+### 2. Tạo virtual environment
+
+```bash
+python -m venv venv
+
+# Windows
+venv\Scripts\activate
+
+# macOS/Linux
+source venv/bin/activate
+```
+
+### 3. Cài dependencies
+
+```bash
+pip install -r requirements.txt
+```
+
+### 4. Cấu hình environment
+
+```bash
+cp .env.example .env
+```
+
+Mở file `.env` và thêm API key:
+- **Groq** (miễn phí): Đăng ký tại [console.groq.com](https://console.groq.com) để lấy `GROQ_API_KEY`
+- **OpenAI** (trả phí): Thêm `OPENAI_API_KEY` nếu muốn dùng GPT
+
+### 5. Chạy server
+
+```bash
+uvicorn app.main:app --reload
+```
+
+Truy cập:
+- API: http://localhost:8000
+- Swagger docs: http://localhost:8000/docs
+
+## API Endpoints
+
+| Method | Endpoint | Mô tả |
+|---|---|---|
+| GET | `/` | Thông tin app |
+| GET | `/api/v1/health` | Health check |
+| POST | `/api/v1/test/generate` | Tạo bài test |
+| POST | `/api/v1/test/submit` | Nộp bài & nhận feedback |
+| POST | `/api/v1/rag/index` | Index knowledge base |
+| POST | `/api/v1/rag/search` | Tìm kiếm trong knowledge base |
+
+## Chạy tests
+
+```bash
+pytest tests/ -v
+```
+
+## Roadmap
+
+- [x] Cấu trúc dự án & API cơ bản
+- [ ] Tích hợp LLM hoàn chỉnh (generate + explain)
+- [ ] Xây dựng knowledge base (grammar, vocabulary)
+- [ ] RAG pipeline end-to-end
+- [ ] Frontend Streamlit
+- [ ] Lưu trữ session & tiến độ học tập
+- [ ] Voice mode (Whisper)
+- [ ] Fine-tune LLM với LoRA
+
+## Đối tượng sử dụng
+
+Sinh viên đại học, người đi làm cần chứng chỉ TOEIC/IELTS.
+
+## License
+
+MIT
