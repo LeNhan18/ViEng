@@ -15,7 +15,7 @@ env/
 
 # Environment variables
 .env
-
+data/knowledge_base
 # IDE
 .idea/
 .vscode/
