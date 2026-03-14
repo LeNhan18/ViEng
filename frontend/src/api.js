@@ -30,3 +30,13 @@ export async function searchKnowledge(query) {
   const { data } = await api.post(`/rag/search?query=${encodeURIComponent(query)}`);
   return data;
 }
+
+export async function translateText({ text, direction, level, useRag }) {
+  const { data } = await api.post("/translate", {
+    text,
+    direction,
+    level,
+    use_rag: useRag,
+  });
+  return data;
+}
