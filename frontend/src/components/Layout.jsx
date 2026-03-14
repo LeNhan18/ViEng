@@ -1,5 +1,5 @@
 import { Outlet, Link, useLocation } from "react-router-dom";
-import { BookOpen, Home, GraduationCap, Languages } from "lucide-react";
+import { Home, GraduationCap, Languages } from "lucide-react";
 
 const navItems = [
   { path: "/", label: "Trang chủ", icon: Home },
@@ -15,9 +15,7 @@ export default function Layout() {
       <header className="sticky top-0 z-50 border-b border-white/20 bg-white/70 backdrop-blur-xl">
         <div className="mx-auto flex h-16 max-w-6xl items-center justify-between px-4">
           <Link to="/" className="flex items-center gap-2.5">
-            <div className="flex h-9 w-9 items-center justify-center rounded-xl bg-indigo-600 text-white">
-              <BookOpen size={20} />
-            </div>
+            <img src="/logoViEng.jpg" alt="ViEng" className="h-9 w-9 rounded-full object-cover" />
             <span className="text-xl font-bold tracking-tight text-slate-900">
               Vi<span className="text-indigo-600">Eng</span>
             </span>
