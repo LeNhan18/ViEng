@@ -249,4 +249,61 @@ class LLMService:
         return response.choices[0].message.content
 
 
+    async def translate(
+        self,
+        text: str,
+        direction: str,
+        level: str,
+        rag_context: str = "",
+    ) -> dict:
+        """Dịch thuật EN<->VI với giải thích ngữ pháp và từ vựng."""
+        if direction == "en_to_vi":
+            src, tgt = "tiếng Anh", "tiếng Việt"
+        else:
+            src, tgt = "tiếng Việt", "tiếng Anh"
+
+        prompt = (
+            f"Bạn là trợ lý dịch thuật chuyên nghiệp, dịch từ {src} sang {tgt}.\n"
+            f"Trình độ người học: {level}.\n\n"
+            f"Văn bản cần dịch:\n\"\"\"\n{text}\n\"\"\"\n\n"
+        )
+
+        if rag_context:
+            prompt += f"Tài liệu tham khảo ngữ pháp/từ vựng:\n{rag_context}\n\n"
+
+        prompt += (
+            "Trả về JSON với format:\n"
+            "{\n"
+            '  "translated": "bản dịch chính xác, tự nhiên",\n'
+            '  "vocabulary": [\n'
+            '    {"word": "từ/cụm từ gốc", "meaning": "nghĩa", "example": "ví dụ câu"}\n'
+            "  ],\n"
+            '  "grammar_notes": [\n'
+            '    "Ghi chú ngữ pháp quan trọng trong câu (nếu có)"\n'
+            "  ]\n"
+            "}\n\n"
+            "Yêu cầu:\n"
+            "- Dịch chính xác, tự nhiên, không dịch máy\n"
+            "- Liệt kê 3-5 từ vựng quan trọng/khó với ví dụ\n"
+            "- Ghi chú 1-3 điểm ngữ pháp đáng chú ý\n"
+            "- Giải thích bằng tiếng Việt, thân thiện\n"
+            "- Chỉ trả về JSON, không thêm text."
+        )
+
+        raw = await self._call_llm(prompt, max_tokens=2000)
+
+        try:
+            cleaned = raw.strip()
+            if cleaned.startswith("```"):
+                cleaned = cleaned.split("\n", 1)[1].rsplit("```", 1)[0]
+            import json
+            return json.loads(cleaned)
+        except Exception:
+            return {
+                "translated": raw,
+                "vocabulary": [],
+                "grammar_notes": [],
+            }
+
+
 llm_service = LLMService()
