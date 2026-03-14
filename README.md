@@ -2,24 +2,26 @@
 
 ## Giới thiệu
 
-ViEng là ứng dụng web hỗ trợ sinh viên Việt Nam luyện thi TOEIC/IELTS một cách cá nhân hóa, sử dụng AI để tạo bài tập, phân tích lỗi sai, và cung cấp feedback tức thì theo phong cách "thầy cô Việt".
+ViEng là ứng dụng web hỗ trợ sinh viên Việt Nam luyện thi TOEIC/IELTS một cách cá nhân hóa, sử dụng AI để tạo bài tập, phân tích lỗi sai, dịch thuật thông minh, và cung cấp feedback tức thì theo phong cách "thầy cô Việt".
 
 ### Tính năng chính
 
-- **Tạo bài test cá nhân hóa**: Chọn kỹ năng (Listening, Reading, Speaking, Writing) và trình độ (Beginner/Intermediate/Advanced)
+- **Tạo đề thi TOEIC đúng format**: Part 5 (Incomplete Sentences), Part 6 (Text Completion), Part 7 (Single & Multiple Passages)
 - **Phân tích và giải thích lỗi**: Feedback chi tiết, thân thiện theo phong cách thầy cô Việt Nam
-- **RAG integration**: Trích dẫn nguồn uy tín (grammar rules, từ vựng) để đảm bảo chính xác
-- **Tiến độ tracking**: Dashboard theo dõi điểm số và điểm yếu
+- **Dịch thuật AI + RAG**: Dịch Anh-Việt / Việt-Anh thông minh, kèm từ vựng quan trọng và ghi chú ngữ pháp
+- **RAG integration**: Tra cứu knowledge base (grammar rules, từ vựng, collocations) để đảm bảo giải thích chính xác
+- **Fine-tune LLM**: Hỗ trợ fine-tune Qwen2.5-7B bằng QLoRA + Unsloth trên Colab miễn phí
 
 ## Tech Stack
 
 | Thành phần | Công nghệ |
 |---|---|
 | Backend | Python 3.11 + FastAPI |
-| LLM | Groq (Llama-3.3-70B) / OpenAI (GPT-4o-mini) |
+| Frontend | React 19 + Vite 6 + TailwindCSS 4 |
+| LLM | Groq (Llama-3.3-70B) / OpenAI (GPT-4o-mini) / Fine-tuned Qwen2.5-7B |
 | RAG | LangChain + ChromaDB |
 | Embeddings | sentence-transformers (multilingual) |
-| Frontend | Streamlit (prototype) |
+| Fine-tune | Unsloth + QLoRA (Google Colab T4) |
 | Testing | pytest |
 
 ## Cấu trúc dự án
@@ -27,21 +29,40 @@ ViEng là ứng dụng web hỗ trợ sinh viên Việt Nam luyện thi TOEIC/IE
 ```
 ViEng/
 ├── app/
-│   ├── main.py              # FastAPI entry point
+│   ├── main.py                  # FastAPI entry point
 │   ├── api/
-│   │   └── routes.py        # API endpoints
+│   │   └── routes.py            # API endpoints
 │   ├── core/
-│   │   └── config.py        # Settings & environment
+│   │   └── config.py            # Settings & environment
 │   ├── models/
-│   │   └── schemas.py       # Pydantic data models
+│   │   └── schemas.py           # Pydantic data models
 │   ├── services/
-│   │   ├── llm_service.py   # LLM integration (Groq/OpenAI)
-│   │   └── rag_service.py   # RAG pipeline (ChromaDB)
+│   │   ├── llm_service.py       # LLM integration (Groq/OpenAI/HF)
+│   │   └── rag_service.py       # RAG pipeline (ChromaDB)
 │   └── utils/
+├── frontend/
+│   ├── src/
+│   │   ├── pages/
+│   │   │   ├── Home.jsx         # Trang chủ
+│   │   │   ├── Exam.jsx         # Làm bài thi TOEIC Part 5/6/7
+│   │   │   ├── Result.jsx       # Kết quả + feedback
+│   │   │   └── Translate.jsx    # Dịch thuật AI
+│   │   ├── components/
+│   │   │   └── Layout.jsx       # Layout chung (header, nav, footer)
+│   │   ├── api.js               # API client (axios)
+│   │   ├── App.jsx              # Router chính
+│   │   └── main.jsx             # Entry point React
+│   ├── package.json
+│   └── vite.config.js
+├── scripts/
+│   ├── generate_finetune_dataset.py  # Sinh dataset fine-tune từ Groq API
+│   └── download_datasets.py          # Tải dataset từ HuggingFace
 ├── data/
-│   └── knowledge_base/      # Tài liệu grammar, từ vựng (.txt)
+│   ├── knowledge_base/          # Tài liệu grammar, từ vựng (.txt)
+│   └── finetune_dataset.jsonl   # Dataset fine-tune LLM
 ├── tests/
 │   └── test_api.py
+├── FineTune_ViEng.ipynb         # Notebook Colab fine-tune LLM
 ├── .env.example
 ├── .gitignore
 ├── requirements.txt
@@ -57,7 +78,7 @@ git clone https://github.com/LeNhan18/ViEng.git
 cd ViEng
 ```
 
-### 2. Tạo virtual environment
+### 2. Backend
 
 ```bash
 python -m venv venv
@@ -67,12 +88,16 @@ venv\Scripts\activate
 
 # macOS/Linux
 source venv/bin/activate
+
+pip install -r requirements.txt
 ```
 
-### 3. Cài dependencies
+### 3. Frontend
 
 ```bash
-pip install -r requirements.txt
+cd frontend
+npm install --legacy-peer-deps
+cd ..
 ```
 
 ### 4. Cấu hình environment
@@ -85,26 +110,57 @@ Mở file `.env` và thêm API key:
 - **Groq** (miễn phí): Đăng ký tại [console.groq.com](https://console.groq.com) để lấy `GROQ_API_KEY`
 - **OpenAI** (trả phí): Thêm `OPENAI_API_KEY` nếu muốn dùng GPT
 
-### 5. Chạy server
+### 5. Chạy ứng dụng
 
 ```bash
+# Terminal 1 - Backend
 uvicorn app.main:app --reload
+
+# Terminal 2 - Frontend
+cd frontend
+npm run dev
 ```
 
 Truy cập:
-- API: http://localhost:8000
-- Swagger docs: http://localhost:8000/docs
+- Frontend: http://localhost:5173
+- API Swagger: http://localhost:8000/docs
 
 ## API Endpoints
 
 | Method | Endpoint | Mô tả |
 |---|---|---|
-| GET | `/` | Thông tin app |
 | GET | `/api/v1/health` | Health check |
-| POST | `/api/v1/test/generate` | Tạo bài test |
-| POST | `/api/v1/test/submit` | Nộp bài & nhận feedback |
-| POST | `/api/v1/rag/index` | Index knowledge base |
+| POST | `/api/v1/test/generate` | Tạo đề thi TOEIC/IELTS (Part 5/6/7) |
+| POST | `/api/v1/test/submit` | Nộp bài & nhận feedback + giải thích |
+| POST | `/api/v1/translate` | Dịch thuật AI (EN↔VI) + từ vựng + ngữ pháp |
+| POST | `/api/v1/rag/index` | Index knowledge base vào vectorstore |
 | POST | `/api/v1/rag/search` | Tìm kiếm trong knowledge base |
+
+## TOEIC Reading Format
+
+Đề thi được sinh đúng format chuẩn TOEIC:
+
+| Part | Dạng bài | Số câu chuẩn |
+|---|---|---|
+| Part 5 | Incomplete Sentences (hoàn thành câu) | 30 câu |
+| Part 6 | Text Completion (hoàn thành đoạn văn) | 16 câu (4 đoạn × 4 câu) |
+| Part 7 Single | Single Passage (đọc hiểu 1 đoạn) | 29 câu |
+| Part 7 Multiple | Multiple Passages (đọc hiểu 2-3 đoạn) | 25 câu (5 bộ × 5 câu) |
+
+## Fine-tune LLM
+
+Dự án hỗ trợ fine-tune model Qwen2.5-7B trên Google Colab miễn phí:
+
+1. **Sinh dataset**: `python scripts/generate_finetune_dataset.py` (dùng Groq API sinh mẫu Part 5/6/7 + giải thích)
+2. **Upload** file `data/finetune_dataset.jsonl` lên Colab
+3. **Mở** `FineTune_ViEng.ipynb` trên Colab (chọn GPU T4)
+4. **Chạy** từng cell: cài thư viện → load model → train → lưu adapter
+
+Sau fine-tune, bật trong `.env`:
+```env
+USE_FINETUNED_MODEL=true
+HF_MODEL_NAME=LeNhan18/ViEng-Qwen2.5-7B-lora
+```
 
 ## Chạy tests
 
@@ -115,13 +171,19 @@ pytest tests/ -v
 ## Roadmap
 
 - [x] Cấu trúc dự án & API cơ bản
-- [ ] Tích hợp LLM hoàn chỉnh (generate + explain)
-- [ ] Xây dựng knowledge base (grammar, vocabulary)
-- [ ] RAG pipeline end-to-end
-- [ ] Frontend Streamlit
+- [x] Tích hợp LLM (Groq/OpenAI) tạo đề + giải thích
+- [x] Knowledge base (20+ file grammar, vocabulary, strategies)
+- [x] RAG pipeline (ChromaDB + embeddings)
+- [x] Frontend React (Trang chủ, Làm bài, Kết quả, Dịch thuật)
+- [x] TOEIC Reading đúng format Part 5/6/7
+- [x] Chức năng dịch thuật AI + RAG
+- [x] Script sinh dataset fine-tune
+- [x] Notebook Colab fine-tune (QLoRA + Unsloth)
+- [x] Tích hợp fine-tuned model vào backend
+- [ ] Thêm dữ liệu đề thi TOEIC thật vào knowledge base
 - [ ] Lưu trữ session & tiến độ học tập
+- [ ] IELTS Reading/Writing format
 - [ ] Voice mode (Whisper)
-- [ ] Fine-tune LLM với LoRA
 
 ## Đối tượng sử dụng
 
