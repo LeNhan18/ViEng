@@ -33,6 +33,9 @@ export default function Result() {
       const answerList = questions.map((q) => ({
         question_id: q.id,
         user_answer: answers[q.id] || "",
+        question_content: q.content || "",
+        correct_answer: q.correct_answer || "",
+        options: q.options || [],
       }));
       const data = await submitAnswers({
         examType: config.examType,

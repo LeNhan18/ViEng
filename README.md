@@ -1,4 +1,12 @@
-# ViEng - Trợ lý luyện thi tiếng Anh AI cho sinh viên Việt Nam
+<p align="center">
+  <img src="Image/logoViEng.jpg" alt="ViEng Logo" width="200" />
+</p>
+
+<h1 align="center">ViEng - Trợ lý luyện thi tiếng Anh AI</h1>
+
+<p align="center">
+  <strong>Cho sinh viên Việt Nam</strong>
+</p>
 
 ## Giới thiệu
 

@@ -36,9 +36,11 @@ export default function Home() {
       <section className="relative overflow-hidden rounded-3xl bg-gradient-to-br from-indigo-600 via-indigo-700 to-purple-800 px-8 py-16 text-center text-white shadow-2xl shadow-indigo-200 md:px-16 md:py-24">
         <div className="absolute inset-0 bg-[url('data:image/svg+xml;base64,PHN2ZyB3aWR0aD0iNjAiIGhlaWdodD0iNjAiIHZpZXdCb3g9IjAgMCA2MCA2MCIgeG1sbnM9Imh0dHA6Ly93d3cudzMub3JnLzIwMDAvc3ZnIj48ZyBmaWxsPSJub25lIiBmaWxsLXJ1bGU9ImV2ZW5vZGQiPjxnIGZpbGw9IiNmZmYiIGZpbGwtb3BhY2l0eT0iLjA1Ij48cGF0aCBkPSJNMzYgMzRoLTJ2LTRoMnYtMmg0djJoMnY0aC0ydjJoLTR2LTJ6bTAtMTZoLTJ2LTRoMlY4aDR2MmgydjRoLTJ2MmgtNHYtMnptMTYgMTZoLTJ2LTRoMnYtMmg0djJoMnY0aC0ydjJoLTR2LTJ6Ii8+PC9nPjwvZz48L3N2Zz4=')] opacity-30" />
         <div className="relative">
-          <div className="mb-4 inline-block rounded-full bg-white/10 px-4 py-1.5 text-sm font-medium backdrop-blur">
-            Powered by AI & RAG
-          </div>
+          <img
+            src="/logoViEng.jpg"
+            alt="ViEng Logo"
+            className="mx-auto mb-6 h-24 w-24 rounded-full object-cover shadow-2xl ring-4 ring-white/30 md:h-32 md:w-32"
+          />
           <h1 className="mb-4 text-4xl font-extrabold leading-tight md:text-6xl">
             Luyện thi TOEIC/IELTS
             <br />
