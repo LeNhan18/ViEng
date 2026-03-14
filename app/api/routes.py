@@ -5,6 +5,7 @@ from app.models.schemas import (
     Part6Passage, Part7Passage, ToeicReadingSection,
     ToeicReadingPart,
     SubmitRequest, SubmitResponse, Feedback,
+    TranslateRequest, TranslateResponse,
     ExamType, Skill,
 )
 from app.services.llm_service import llm_service
@@ -169,6 +170,37 @@ async def submit_answers(request: SubmitRequest):
         )
     except Exception as e:
         logger.error(f"Error submitting answers: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/translate", response_model=TranslateResponse)
+async def translate_text(request: TranslateRequest):
+    """Dịch thuật EN<->VI bằng AI, kết hợp RAG để tra cứu ngữ pháp/từ vựng liên quan."""
+    try:
+        rag_context = ""
+        if request.use_rag:
+            query = request.text[:200]
+            if request.direction.value == "en_to_vi":
+                query = f"grammar vocabulary {query}"
+            rag_context = rag_service.retrieve(query, k=3)
+
+        result = await llm_service.translate(
+            text=request.text,
+            direction=request.direction.value,
+            level=request.level.value,
+            rag_context=rag_context,
+        )
+
+        return TranslateResponse(
+            original=request.text,
+            translated=result.get("translated", ""),
+            direction=request.direction,
+            vocabulary=result.get("vocabulary", []),
+            grammar_notes=result.get("grammar_notes", []),
+            rag_context=rag_context[:500] if rag_context else "",
+        )
+    except Exception as e:
+        logger.error(f"Error translating: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 
