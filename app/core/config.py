@@ -14,6 +14,9 @@ class Settings(BaseSettings):
     chroma_persist_dir: str = "./data/vectorstore"
     embedding_model: str = "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2"
 
+    hf_model_name: str = ""
+    use_finetuned_model: bool = False
+
     model_config = {"env_file": ".env", "env_file_encoding": "utf-8"}
 
 

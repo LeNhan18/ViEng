@@ -1,9 +1,10 @@
 import { Outlet, Link, useLocation } from "react-router-dom";
-import { BookOpen, Home, GraduationCap } from "lucide-react";
+import { BookOpen, Home, GraduationCap, Languages } from "lucide-react";
 
 const navItems = [
   { path: "/", label: "Trang chủ", icon: Home },
   { path: "/exam", label: "Làm bài", icon: GraduationCap },
+  { path: "/translate", label: "Dịch thuật", icon: Languages },
 ];
 
 export default function Layout() {

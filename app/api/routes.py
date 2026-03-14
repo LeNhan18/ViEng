@@ -2,13 +2,24 @@ import json
 from fastapi import APIRouter, HTTPException
 from app.models.schemas import (
     TestRequest, TestResponse, Question,
+    Part6Passage, Part7Passage, ToeicReadingSection,
+    ToeicReadingPart,
     SubmitRequest, SubmitResponse, Feedback,
+    TranslateRequest, TranslateResponse,
+    ExamType, Skill,
 )
 from app.services.llm_service import llm_service
 from app.services.rag_service import rag_service
 from loguru import logger
 
 router = APIRouter(prefix="/api/v1", tags=["ViEng"])
+
+
+def _clean_json(raw: str) -> str:
+    text = raw.strip()
+    if text.startswith("```"):
+        text = text.split("\n", 1)[1].rsplit("```", 1)[0]
+    return text
 
 
 @router.get("/health")
@@ -18,28 +29,90 @@ async def health_check():
 
 @router.post("/test/generate", response_model=TestResponse)
 async def generate_test(request: TestRequest):
-    """Tạo bài test cá nhân hóa dựa trên kỹ năng và trình độ."""
+    """Tạo bài test TOEIC/IELTS. Nếu chọn TOEIC Reading + part, sẽ sinh đúng format Part 5/6/7."""
     try:
+        is_toeic_reading = (
+            request.exam_type == ExamType.TOEIC
+            and request.skill == Skill.READING
+            and request.part is not None
+        )
+
         raw = await llm_service.generate_questions(
             exam_type=request.exam_type,
             skill=request.skill,
             level=request.level,
             num_questions=request.num_questions,
+            part=request.part,
         )
 
-        raw_cleaned = raw.strip()
-        if raw_cleaned.startswith("```"):
-            raw_cleaned = raw_cleaned.split("\n", 1)[1].rsplit("```", 1)[0]
+        raw_cleaned = _clean_json(raw)
+        data = json.loads(raw_cleaned)
 
-        questions_data = json.loads(raw_cleaned)
-        questions = [Question(**q) for q in questions_data]
+        if is_toeic_reading and request.part == ToeicReadingPart.PART5:
+            questions = [Question(**q) for q in data]
+            section = ToeicReadingSection(part5=questions)
+            return TestResponse(
+                exam_type=request.exam_type,
+                skill=request.skill,
+                level=request.level,
+                part=request.part,
+                reading_section=section,
+                questions=questions,
+            )
 
+        if is_toeic_reading and request.part == ToeicReadingPart.PART6:
+            passages = [Part6Passage(**p) for p in data]
+            all_questions = []
+            qid = 1
+            for p in passages:
+                for q in p.questions:
+                    q.id = qid
+                    all_questions.append(q)
+                    qid += 1
+            section = ToeicReadingSection(part6=passages)
+            return TestResponse(
+                exam_type=request.exam_type,
+                skill=request.skill,
+                level=request.level,
+                part=request.part,
+                reading_section=section,
+                questions=all_questions,
+            )
+
+        if is_toeic_reading and request.part in (
+            ToeicReadingPart.PART7_SINGLE,
+            ToeicReadingPart.PART7_MULTIPLE,
+        ):
+            passages = [Part7Passage(**p) for p in data]
+            all_questions = []
+            qid = 1
+            for p in passages:
+                for q in p.questions:
+                    q.id = qid
+                    all_questions.append(q)
+                    qid += 1
+            section = ToeicReadingSection()
+            if request.part == ToeicReadingPart.PART7_SINGLE:
+                section.part7_single = passages
+            else:
+                section.part7_multiple = passages
+            return TestResponse(
+                exam_type=request.exam_type,
+                skill=request.skill,
+                level=request.level,
+                part=request.part,
+                reading_section=section,
+                questions=all_questions,
+            )
+
+        questions = [Question(**q) for q in data]
         return TestResponse(
             exam_type=request.exam_type,
             skill=request.skill,
             level=request.level,
             questions=questions,
         )
+
     except json.JSONDecodeError:
         logger.error(f"LLM returned invalid JSON: {raw[:200]}")
         raise HTTPException(status_code=502, detail="LLM trả về dữ liệu không hợp lệ. Vui lòng thử lại.")
@@ -97,6 +170,37 @@ async def submit_answers(request: SubmitRequest):
         )
     except Exception as e:
         logger.error(f"Error submitting answers: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/translate", response_model=TranslateResponse)
+async def translate_text(request: TranslateRequest):
+    """Dịch thuật EN<->VI bằng AI, kết hợp RAG để tra cứu ngữ pháp/từ vựng liên quan."""
+    try:
+        rag_context = ""
+        if request.use_rag:
+            query = request.text[:200]
+            if request.direction.value == "en_to_vi":
+                query = f"grammar vocabulary {query}"
+            rag_context = rag_service.retrieve(query, k=3)
+
+        result = await llm_service.translate(
+            text=request.text,
+            direction=request.direction.value,
+            level=request.level.value,
+            rag_context=rag_context,
+        )
+
+        return TranslateResponse(
+            original=request.text,
+            translated=result.get("translated", ""),
+            direction=request.direction,
+            vocabulary=result.get("vocabulary", []),
+            grammar_notes=result.get("grammar_notes", []),
+            rag_context=rag_context[:500] if rag_context else "",
+        )
+    except Exception as e:
+        logger.error(f"Error translating: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 
