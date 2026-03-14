@@ -129,20 +129,25 @@ async def submit_answers(request: SubmitRequest):
         correct_count = 0
 
         for answer in request.answers:
-            context = rag_service.retrieve(
-                f"{request.exam_type.value} {request.skill.value} question {answer.question_id}"
+            is_correct = (
+                answer.user_answer == answer.correct_answer
+                or answer.user_answer.startswith(answer.correct_answer)
             )
-
-            explanation = await llm_service.explain_answer(
-                question=f"Câu {answer.question_id}",
-                user_answer=answer.user_answer,
-                correct_answer="",
-                context=context,
-            )
-
-            is_correct = True  # TODO: so sánh với đáp án đúng từ DB/cache
             if is_correct:
                 correct_count += 1
+
+            question_text = answer.question_content or f"Câu {answer.question_id}"
+            options_text = ", ".join(answer.options) if answer.options else ""
+
+            rag_query = f"{question_text} {options_text}"
+            context = rag_service.retrieve(rag_query, k=3)
+
+            explanation = await llm_service.explain_answer(
+                question=f"{question_text}\nĐáp án: {options_text}" if options_text else question_text,
+                user_answer=answer.user_answer,
+                correct_answer=answer.correct_answer,
+                context=context,
+            )
 
             sources = []
             if context:
@@ -156,7 +161,7 @@ async def submit_answers(request: SubmitRequest):
                 question_id=answer.question_id,
                 is_correct=is_correct,
                 user_answer=answer.user_answer,
-                correct_answer="",
+                correct_answer=answer.correct_answer,
                 explanation=explanation,
                 sources=sources,
             ))
