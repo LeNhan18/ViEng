@@ -46,7 +46,12 @@ class RAGService:
             logger.warning(f"Không tìm thấy tài liệu .txt trong {docs_dir}")
             return 0
 
-        loader = DirectoryLoader(docs_dir, glob="**/*.txt", loader_cls=TextLoader)
+        loader = DirectoryLoader(
+            docs_dir,
+            glob="**/*.txt",
+            loader_cls=TextLoader,
+            loader_kwargs={"encoding": "utf-8"},
+        )
         documents = loader.load()
 
         splitter = RecursiveCharacterTextSplitter(

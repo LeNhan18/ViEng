@@ -28,6 +28,23 @@ app.add_middleware(
 app.include_router(router)
 
 
+@app.on_event("startup")
+async def startup_event():
+    from app.services.rag_service import rag_service
+    from pathlib import Path
+
+    persist_path = Path(settings.chroma_persist_dir)
+    if not persist_path.exists() or not any(persist_path.iterdir()):
+        logger.info("Vectorstore chưa có, đang index knowledge base...")
+        count = rag_service.index_knowledge_base()
+        if count > 0:
+            logger.info(f"Đã index {count} chunks khi khởi động")
+        else:
+            logger.warning("Không có tài liệu trong data/knowledge_base/ để index")
+    else:
+        logger.info("Vectorstore đã tồn tại, bỏ qua index")
+
+
 @app.get("/")
 async def root():
     return {
