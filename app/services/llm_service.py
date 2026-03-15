@@ -96,30 +96,57 @@ class LLMService:
         settings = get_settings()
         return settings.use_finetuned_model and settings.hf_model_name
 
-    def _build_part5_prompt(self, level: Level, num_questions: int) -> str:
+    def _build_rag_context_section(self, rag_context: str) -> str:
+        """Tạo đoạn RAG context để chèn vào prompt."""
+        if not rag_context:
+            return ""
         return (
+            "\n\nTài liệu tham khảo ngữ pháp/từ vựng (dùng để tạo câu hỏi chính xác hơn):\n"
+            f"---\n{rag_context}\n---\n"
+        )
+
+    def _retrieve_for_part(self, part: str, level: Level) -> str:
+        """Retrieve RAG context phù hợp cho từng dạng Part."""
+        queries = {
+            "part5": f"TOEIC Part 5 grammar rules word forms tenses prepositions {level.value}",
+            "part6": f"TOEIC Part 6 connectors conjunctions text completion grammar {level.value}",
+            "part7_single": f"TOEIC Part 7 reading comprehension vocabulary business {level.value}",
+            "part7_multiple": f"TOEIC Part 7 multiple passages vocabulary business communication {level.value}",
+        }
+        query = queries.get(part, f"TOEIC grammar vocabulary {level.value}")
+        return rag_service.retrieve_mmr(query, k=3)
+
+    def _build_part5_prompt(self, level: Level, num_questions: int, rag_context: str = "") -> str:
+        base = (
             f"Tạo {num_questions} câu hỏi TOEIC Reading Part 5 (Incomplete Sentences) trình độ {level.value}.\n\n"
             "Format chuẩn TOEIC Part 5:\n"
             "- Mỗi câu là 1 câu tiếng Anh có 1 chỗ trống (___)\n"
             "- 4 đáp án A, B, C, D\n"
             "- Kiểm tra ngữ pháp (thì, dạng từ, giới từ, mệnh đề quan hệ...) hoặc từ vựng\n"
-            "- Chủ đề: công việc, email, hợp đồng, kinh doanh\n\n"
-            "Trả về JSON array:\n"
+            "- Chủ đề: công việc, email, hợp đồng, kinh doanh\n"
+        )
+        base += self._build_rag_context_section(rag_context)
+        base += (
+            "\nTrả về JSON array:\n"
             '[{"id": 1, "content": "The manager ___ the report before the meeting.", '
             '"options": ["A. review", "B. reviewed", "C. reviewing", "D. reviews"], '
             '"correct_answer": "B"}]\n'
             "Chỉ trả về JSON, không thêm text."
         )
+        return base
 
-    def _build_part6_prompt(self, level: Level, num_passages: int) -> str:
-        return (
+    def _build_part6_prompt(self, level: Level, num_passages: int, rag_context: str = "") -> str:
+        base = (
             f"Tạo {num_passages} đoạn văn TOEIC Reading Part 6 (Text Completion) trình độ {level.value}.\n\n"
             "Format chuẩn TOEIC Part 6:\n"
             "- Mỗi đoạn là 1 email/memo/thông báo/bài báo ngắn (100-150 từ)\n"
             "- Mỗi đoạn có đúng 4 chỗ trống đánh số (1), (2), (3), (4)\n"
             "- Mỗi chỗ trống có 4 đáp án A, B, C, D\n"
-            "- Có thể hỏi: điền từ, điền cụm từ, hoặc điền cả câu phù hợp ngữ cảnh\n\n"
-            "Trả về JSON array, mỗi phần tử là 1 đoạn:\n"
+            "- Có thể hỏi: điền từ, điền cụm từ, hoặc điền cả câu phù hợp ngữ cảnh\n"
+        )
+        base += self._build_rag_context_section(rag_context)
+        base += (
+            "\nTrả về JSON array, mỗi phần tử là 1 đoạn:\n"
             '[{"passage": "Dear Mr. Smith,\\nWe are pleased to inform you that your application has been (1)___. '
             'Please (2)___ the attached document...\\n...", '
             '"questions": [{"id": 1, "content": "(1)", "options": ["A. accepted", "B. accepting", "C. accept", "D. acceptable"], "correct_answer": "A"}, '
@@ -127,15 +154,19 @@ class LLMService:
             '{"id": 3, ...}, {"id": 4, ...}]}]\n'
             "Chỉ trả về JSON, không thêm text."
         )
+        return base
 
-    def _build_part7_single_prompt(self, level: Level, num_passages: int) -> str:
-        return (
+    def _build_part7_single_prompt(self, level: Level, num_passages: int, rag_context: str = "") -> str:
+        base = (
             f"Tạo {num_passages} bài đọc TOEIC Reading Part 7 Single Passage trình độ {level.value}.\n\n"
             "Format chuẩn TOEIC Part 7 Single:\n"
             "- Mỗi bài là 1 đoạn văn (email, quảng cáo, thông báo, tin nhắn, bài báo) dài 150-250 từ\n"
             "- Mỗi bài có 2-4 câu hỏi\n"
-            "- Dạng câu hỏi: ý chính, chi tiết, suy luận, từ đồng nghĩa, mục đích người viết\n\n"
-            "Trả về JSON array:\n"
+            "- Dạng câu hỏi: ý chính, chi tiết, suy luận, từ đồng nghĩa, mục đích người viết\n"
+        )
+        base += self._build_rag_context_section(rag_context)
+        base += (
+            "\nTrả về JSON array:\n"
             '[{"passages": ["Dear Employees,\\nWe are excited to announce..."], '
             '"questions": [{"id": 1, "content": "What is the purpose of the email?", '
             '"options": ["A. To announce a policy change", "B. To request information", '
@@ -143,15 +174,19 @@ class LLMService:
             '"correct_answer": "A"}, ...]}]\n'
             "Chỉ trả về JSON, không thêm text."
         )
+        return base
 
-    def _build_part7_multiple_prompt(self, level: Level, num_sets: int) -> str:
-        return (
+    def _build_part7_multiple_prompt(self, level: Level, num_sets: int, rag_context: str = "") -> str:
+        base = (
             f"Tạo {num_sets} bộ TOEIC Reading Part 7 Multiple Passages trình độ {level.value}.\n\n"
             "Format chuẩn TOEIC Part 7 Multiple:\n"
             "- Mỗi bộ gồm 2-3 đoạn văn liên quan (email + reply, quảng cáo + review, memo + schedule...)\n"
             "- Mỗi bộ có 5 câu hỏi\n"
-            "- Câu hỏi yêu cầu liên kết thông tin giữa các đoạn\n\n"
-            "Trả về JSON array:\n"
+            "- Câu hỏi yêu cầu liên kết thông tin giữa các đoạn\n"
+        )
+        base += self._build_rag_context_section(rag_context)
+        base += (
+            "\nTrả về JSON array:\n"
             '[{"passages": ["From: john@company.com\\nSubject: Team Building Event\\n...", '
             '"From: sarah@company.com\\nSubject: Re: Team Building Event\\n..."], '
             '"questions": [{"id": 1, "content": "What does John suggest?", '
@@ -159,6 +194,7 @@ class LLMService:
             '"correct_answer": "A"}, ... (5 câu hỏi)]}]\n'
             "Chỉ trả về JSON, không thêm text."
         )
+        return base
 
     async def _call_llm(self, prompt: str, max_tokens: int = 2000) -> str:
         if self._use_finetuned:
