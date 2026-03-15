@@ -18,7 +18,8 @@ ViEng là ứng dụng web hỗ trợ sinh viên Việt Nam luyện thi TOEIC/IE
 - **Phân tích và giải thích lỗi**: Feedback chi tiết, thân thiện theo phong cách thầy cô Việt Nam
 - **Dịch thuật AI + RAG**: Dịch Anh-Việt / Việt-Anh thông minh, kèm từ vựng quan trọng và ghi chú ngữ pháp
 - **RAG integration**: Tra cứu knowledge base (grammar rules, từ vựng, collocations) để đảm bảo giải thích chính xác
-- **Fine-tune LLM**: Hỗ trợ fine-tune Qwen2.5-7B bằng QLoRA + Unsloth trên Colab miễn phí
+- **Fine-tune LLM (RAG-augmented)**: Fine-tune Qwen2.5-7B bằng QLoRA + Unsloth, training data có kèm RAG context
+- **RAG-augmented Generation**: Tạo đề thi & giải thích đều sử dụng knowledge base qua RAG pipeline
 
 ## Tech Stack
 
@@ -155,14 +156,18 @@ Truy cập:
 | Part 7 Single | Single Passage (đọc hiểu 1 đoạn) | 29 câu |
 | Part 7 Multiple | Multiple Passages (đọc hiểu 2-3 đoạn) | 25 câu (5 bộ × 5 câu) |
 
-## Fine-tune LLM
+## Fine-tune LLM (RAG-augmented)
 
-Dự án hỗ trợ fine-tune model Qwen2.5-7B trên Google Colab miễn phí:
+Dự án hỗ trợ fine-tune model Qwen2.5-7B trên Google Colab miễn phí, với **RAG-augmented training data**:
 
-1. **Sinh dataset**: `python scripts/generate_finetune_dataset.py` (dùng Groq API sinh mẫu Part 5/6/7 + giải thích)
-2. **Upload** file `data/finetune_dataset.jsonl` lên Colab
-3. **Mở** `FineTune_ViEng.ipynb` trên Colab (chọn GPU T4)
-4. **Chạy** từng cell: cài thư viện → load model → train → lưu adapter
+1. **Index knowledge base**: Đảm bảo `data/knowledge_base/` có các file .txt (grammar, vocabulary, strategies)
+2. **Sinh dataset RAG-augmented**: `python scripts/generate_finetune_dataset.py`
+   - Script tự khởi tạo RAG retriever từ knowledge base
+   - Mỗi training example có kèm **RAG context** (tài liệu ngữ pháp/từ vựng liên quan)
+   - Model học cách **sử dụng retrieved context** khi generate
+3. **Upload** file `data/finetune_dataset.jsonl` lên Colab
+4. **Mở** `FineTune_ViEng.ipynb` trên Colab (chọn GPU T4)
+5. **Chạy** từng cell: cài thư viện → load model → train → lưu adapter
 
 Sau fine-tune, bật trong `.env`:
 ```env
