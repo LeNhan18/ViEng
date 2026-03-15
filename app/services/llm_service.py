@@ -196,15 +196,16 @@ class LLMService:
         )
         return base
 
-    async def _call_llm(self, prompt: str, max_tokens: int = 2000) -> str:
+    async def _call_llm(self, prompt: str, max_tokens: int = 2000, system_msg: str = "") -> str:
+        sys_content = system_msg or SYSTEM_PROMPT
         if self._use_finetuned:
-            return await self._generate_with_hf(prompt, max_tokens=max_tokens)
+            return await self._generate_with_hf(prompt, max_tokens=max_tokens, system_msg=sys_content)
 
         client, model = self._client_and_model
         response = await client.chat.completions.create(
             model=model,
             messages=[
-                {"role": "system", "content": "Bạn là giáo viên luyện thi TOEIC/IELTS chuyên nghiệp. Luôn trả về JSON hợp lệ."},
+                {"role": "system", "content": sys_content},
                 {"role": "user", "content": prompt},
             ],
             temperature=0.7,
@@ -223,24 +224,33 @@ class LLMService:
         logger.info(f"Generating questions: {exam_type}/{skill}/{level} part={part} n={num_questions}")
 
         if exam_type == ExamType.TOEIC and skill == Skill.READING and part:
+            rag_context = self._retrieve_for_part(part.value, level)
+            if rag_context:
+                logger.info(f"RAG context retrieved for {part.value} ({len(rag_context)} chars)")
+
             if part == ToeicReadingPart.PART5:
-                prompt = self._build_part5_prompt(level, num_questions)
+                prompt = self._build_part5_prompt(level, num_questions, rag_context)
                 return await self._call_llm(prompt, max_tokens=2000)
 
             elif part == ToeicReadingPart.PART6:
                 num_passages = max(1, num_questions // 4)
-                prompt = self._build_part6_prompt(level, num_passages)
+                prompt = self._build_part6_prompt(level, num_passages, rag_context)
                 return await self._call_llm(prompt, max_tokens=3000)
 
             elif part == ToeicReadingPart.PART7_SINGLE:
                 num_passages = max(1, num_questions // 3)
-                prompt = self._build_part7_single_prompt(level, num_passages)
+                prompt = self._build_part7_single_prompt(level, num_passages, rag_context)
                 return await self._call_llm(prompt, max_tokens=4000)
 
             elif part == ToeicReadingPart.PART7_MULTIPLE:
                 num_sets = max(1, num_questions // 5)
-                prompt = self._build_part7_multiple_prompt(level, num_sets)
+                prompt = self._build_part7_multiple_prompt(level, num_sets, rag_context)
                 return await self._call_llm(prompt, max_tokens=4000)
+
+        rag_context = rag_service.retrieve_mmr(
+            f"TOEIC IELTS grammar vocabulary {skill.value} {level.value}", k=2,
+        )
+        rag_section = self._build_rag_context_section(rag_context)
 
         prompt = (
             f"Bạn là một giáo viên luyện thi {exam_type.value.upper()} giàu kinh nghiệm tại Việt Nam.\n"
@@ -249,6 +259,7 @@ class LLMService:
             f"- Mỗi câu hỏi có 4 đáp án A, B, C, D (nếu là reading/listening)\n"
             f"- Đánh dấu đáp án đúng\n"
             f"- Nội dung sát format thi {exam_type.value.upper()} thật\n"
+            f"{rag_section}\n"
             f"- Trả về JSON array với format:\n"
             f'  [{{"id": 1, "content": "...", "options": ["A. ...", "B. ...", "C. ...", "D. ..."], "correct_answer": "A"}}]\n'
             f"- Chỉ trả về JSON, không thêm text khác."
@@ -279,21 +290,11 @@ class LLMService:
             "Dùng giọng văn thân thiện kiểu 'thầy cô Việt', có ví dụ đời thường."
         )
 
-        if self._use_finetuned:
-            return await self._generate_with_hf(prompt, max_tokens=1000)
-
-        client, model = self._client_and_model
-        response = await client.chat.completions.create(
-            model=model,
-            messages=[
-                {"role": "system", "content": "Bạn là thầy giáo tiếng Anh Việt Nam, giải thích dễ hiểu, thân thiện."},
-                {"role": "user", "content": prompt},
-            ],
-            temperature=0.6,
-            max_tokens=1000,
+        explain_system = (
+            "Bạn là thầy giáo tiếng Anh Việt Nam, giải thích dễ hiểu, thân thiện. "
+            "Khi được cung cấp tài liệu tham khảo, hãy dựa vào đó để giải thích chính xác hơn."
         )
-
-        return response.choices[0].message.content
+        return await self._call_llm(prompt, max_tokens=1000, system_msg=explain_system)
 
 
     async def translate(
