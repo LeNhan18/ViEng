@@ -10,6 +10,8 @@ from pathlib import Path
 class RAGService:
     """Quản lý RAG pipeline: indexing knowledge base và truy xuất context."""
 
+    SCORE_THRESHOLD = 1.2
+
     def __init__(self):
         settings = get_settings()
         self._embeddings = None
@@ -86,5 +88,95 @@ class RAGService:
         )
         return context
 
+    def retrieve_with_scores(self, query: str, k: int = 5) -> list[tuple]:
+        """Truy xuất kèm điểm similarity, lọc theo threshold."""
+        vectorstore = self._get_vectorstore()
+        if vectorstore is None:
+            return []
+
+        results = vectorstore.similarity_search_with_score(query, k=k)
+        filtered = [
+            (doc, score) for doc, score in results
+            if score <= self.SCORE_THRESHOLD
+        ]
+        return filtered
+
+    def retrieve_mmr(self, query: str, k: int = 3, fetch_k: int = 10, lambda_mult: float = 0.7) -> str:
+        """Truy xuất dùng MMR (Maximal Marginal Relevance) để tăng đa dạng kết quả."""
+        vectorstore = self._get_vectorstore()
+        if vectorstore is None:
+            return ""
+
+        results = vectorstore.max_marginal_relevance_search(
+            query, k=k, fetch_k=fetch_k, lambda_mult=lambda_mult,
+        )
+        if not results:
+            return ""
+
+        context = "\n\n---\n\n".join(
+            f"[Nguồn: {doc.metadata.get('source', 'N/A')}]\n{doc.page_content}"
+            for doc in results
+        )
+        return context
+
+    def retrieve_for_topic(self, topic: str, k: int = 3) -> str:
+        """Retrieve context phù hợp cho 1 chủ đề ngữ pháp/từ vựng cụ thể."""
+        query = f"English grammar rules for {topic}, examples and tips for TOEIC"
+        return self.retrieve_mmr(query, k=k)
+
 
 rag_service = RAGService()
+
+
+def create_standalone_retriever(
+    docs_dir: str = "data/knowledge_base",
+    embedding_model: str = "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2",
+    persist_dir: str = "./data/vectorstore",
+):
+    """Tạo retriever standalone (dùng trong scripts, không cần FastAPI)."""
+    embeddings = HuggingFaceEmbeddings(
+        model_name=embedding_model,
+        model_kwargs={"device": "cpu"},
+    )
+
+    persist_path = Path(persist_dir)
+    if persist_path.exists() and any(persist_path.iterdir()):
+        vectorstore = Chroma(
+            persist_directory=persist_dir,
+            embedding_function=embeddings,
+        )
+    else:
+        docs_path = Path(docs_dir)
+        if not docs_path.exists() or not any(docs_path.glob("*.txt")):
+            return None
+
+        loader = DirectoryLoader(
+            docs_dir,
+            glob="**/*.txt",
+            loader_cls=TextLoader,
+            loader_kwargs={"encoding": "utf-8"},
+        )
+        documents = loader.load()
+
+        splitter = RecursiveCharacterTextSplitter(
+            chunk_size=500, chunk_overlap=50,
+            separators=["\n\n", "\n", ". ", " ", ""],
+        )
+        chunks = splitter.split_documents(documents)
+
+        vectorstore = Chroma.from_documents(
+            documents=chunks,
+            embedding=embeddings,
+            persist_directory=persist_dir,
+        )
+
+    def retrieve(query: str, k: int = 3) -> str:
+        results = vectorstore.max_marginal_relevance_search(query, k=k, fetch_k=10)
+        if not results:
+            return ""
+        return "\n\n---\n\n".join(
+            f"[Nguồn: {doc.metadata.get('source', 'N/A')}]\n{doc.page_content}"
+            for doc in results
+        )
+
+    return retrieve
