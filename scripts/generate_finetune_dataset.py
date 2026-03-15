@@ -1,10 +1,13 @@
 """
-Script sinh dataset fine-tune cho ViEng.
+Script sinh dataset fine-tune RAG-augmented cho ViEng.
 Dung Groq API (mien phi) de tao 3 loai mau:
   1. TOEIC Part 5 (Incomplete Sentences)
   2. TOEIC Part 6 (Text Completion)
   3. TOEIC Part 7 (Reading Comprehension)
-  4. Giai thich dap an theo phong cach thay co Viet
+  4. Giai thich dap an theo phong cach thay co Viet (co kem RAG context)
+
+Training data BAO GOM RAG context trong conversation,
+de model hoc cach su dung retrieved context khi generate.
 
 Cach chay:
     cd E:/ViEng
@@ -20,15 +23,44 @@ from pathlib import Path
 
 sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding="utf-8")
 
-from groq import Groq
+PROJECT_ROOT = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(PROJECT_ROOT))
 
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+from groq import Groq
 from dotenv import load_dotenv
 
-load_dotenv(Path(__file__).resolve().parent.parent / ".env")
+load_dotenv(PROJECT_ROOT / ".env")
 
 client = Groq(api_key=os.getenv("GROQ_API_KEY"))
-OUTPUT_FILE = Path(__file__).resolve().parent.parent / "data" / "finetune_dataset.jsonl"
+OUTPUT_FILE = PROJECT_ROOT / "data" / "finetune_dataset.jsonl"
+
+retriever = None
+
+
+def init_rag():
+    """Khoi tao RAG retriever tu knowledge base (standalone, khong can FastAPI)."""
+    global retriever
+    from app.services.rag_service import create_standalone_retriever
+
+    print("  Dang khoi tao RAG retriever tu knowledge base...")
+    retriever = create_standalone_retriever(
+        docs_dir=str(PROJECT_ROOT / "data" / "knowledge_base"),
+        persist_dir=str(PROJECT_ROOT / "data" / "vectorstore"),
+    )
+    if retriever:
+        print("  RAG retriever san sang!")
+    else:
+        print("  [!] Khong the khoi tao RAG (knowledge base trong?). Tiep tuc khong co RAG.")
+
+
+def retrieve_context(query: str, k: int = 3) -> str:
+    """Retrieve context tu knowledge base. Tra ve '' neu khong co retriever."""
+    if retriever is None:
+        return ""
+    try:
+        return retriever(query, k=k)
+    except Exception:
+        return ""
 
 
 PART5_CONFIGS = [
@@ -76,6 +108,17 @@ GRAMMAR_TOPICS = [
     "modal verbs (must, should, might, could)",
 ]
 
+SYSTEM_MSG_GENERATE = (
+    "Ban la giao vien luyen thi TOEIC chuyen nghiep tai Viet Nam. "
+    "Khi duoc cung cap tai lieu tham khao, hay su dung noi dung do de tao cau hoi chinh xac hon. "
+    "Luon tra ve JSON hop le."
+)
+
+SYSTEM_MSG_EXPLAIN = (
+    "Ban la thay giao tieng Anh Viet Nam, giai thich than thien, gan gui, de hieu. "
+    "Khi duoc cung cap tai lieu tham khao, hay dua vao do de giai thich chinh xac hon."
+)
+
 
 def call_groq(system_msg: str, user_msg: str, max_tokens: int = 2000, temp: float = 0.8) -> str:
     resp = client.chat.completions.create(
@@ -90,14 +133,29 @@ def call_groq(system_msg: str, user_msg: str, max_tokens: int = 2000, temp: floa
     return resp.choices[0].message.content.strip()
 
 
+def build_rag_section(context: str) -> str:
+    """Tao doan RAG context de chen vao user message trong training data."""
+    if not context:
+        return ""
+    return f"\n\nTai lieu tham khao ngu phap/tu vung:\n---\n{context}\n---\n"
+
+
 def gen_part5(config: dict) -> list[dict]:
     level = config["level"]
     n = config["n"]
 
-    instruction = f"Tao {n} cau hoi TOEIC Reading Part 5 (Incomplete Sentences) trinh do {level}."
+    rag_context = retrieve_context(
+        f"TOEIC Part 5 grammar tenses word forms prepositions {level}", k=3
+    )
+    rag_section = build_rag_section(rag_context)
+
+    instruction = (
+        f"Tao {n} cau hoi TOEIC Reading Part 5 (Incomplete Sentences) trinh do {level}."
+        f"{rag_section}"
+    )
 
     system_msg = (
-        "Ban la giao vien luyen thi TOEIC giàu kinh nghiem tai Viet Nam. "
+        f"{SYSTEM_MSG_GENERATE} "
         "Tao cau hoi Part 5 dung format chuan TOEIC that. "
         "Moi cau la 1 cau tieng Anh co 1 cho trong (___), 4 dap an A, B, C, D. "
         "Chu de: cong viec, email, hop dong, kinh doanh, nhan su. "
@@ -109,7 +167,7 @@ def gen_part5(config: dict) -> list[dict]:
 
     try:
         output = call_groq(system_msg, instruction)
-        return [{"instruction": instruction, "output": output}]
+        return [{"instruction": instruction, "output": output, "system": SYSTEM_MSG_GENERATE}]
     except Exception as e:
         print(f"  [!] Part5 error: {e}")
         return []
@@ -119,10 +177,18 @@ def gen_part6(config: dict) -> list[dict]:
     level = config["level"]
     n = config["n_passages"]
 
-    instruction = f"Tao {n} doan van TOEIC Reading Part 6 (Text Completion) trinh do {level}."
+    rag_context = retrieve_context(
+        f"TOEIC Part 6 connectors conjunctions text completion grammar {level}", k=3
+    )
+    rag_section = build_rag_section(rag_context)
+
+    instruction = (
+        f"Tao {n} doan van TOEIC Reading Part 6 (Text Completion) trinh do {level}."
+        f"{rag_section}"
+    )
 
     system_msg = (
-        "Ban la giao vien luyen thi TOEIC giàu kinh nghiem tai Viet Nam. "
+        f"{SYSTEM_MSG_GENERATE} "
         "Tao doan van Part 6 dung format chuan TOEIC that. "
         "Moi doan la 1 email/memo/thong bao (100-150 tu) co dung 4 cho trong danh so (1), (2), (3), (4). "
         "Moi cho trong co 4 dap an A, B, C, D. "
@@ -134,7 +200,7 @@ def gen_part6(config: dict) -> list[dict]:
 
     try:
         output = call_groq(system_msg, instruction, max_tokens=3000)
-        return [{"instruction": instruction, "output": output}]
+        return [{"instruction": instruction, "output": output, "system": SYSTEM_MSG_GENERATE}]
     except Exception as e:
         print(f"  [!] Part6 error: {e}")
         return []
@@ -144,10 +210,18 @@ def gen_part7_single(config: dict) -> list[dict]:
     level = config["level"]
     n = config["n_passages"]
 
-    instruction = f"Tao {n} bai doc TOEIC Reading Part 7 Single Passage trinh do {level}."
+    rag_context = retrieve_context(
+        f"TOEIC Part 7 reading comprehension vocabulary business {level}", k=2
+    )
+    rag_section = build_rag_section(rag_context)
+
+    instruction = (
+        f"Tao {n} bai doc TOEIC Reading Part 7 Single Passage trinh do {level}."
+        f"{rag_section}"
+    )
 
     system_msg = (
-        "Ban la giao vien luyen thi TOEIC giàu kinh nghiem tai Viet Nam. "
+        f"{SYSTEM_MSG_GENERATE} "
         "Tao bai doc Part 7 Single Passage dung format chuan TOEIC that. "
         "Moi bai la 1 doan van (email, quang cao, thong bao, bai bao) dai 150-250 tu. "
         "Moi bai co 2-4 cau hoi: y chinh, chi tiet, suy luan, tu dong nghia, muc dich nguoi viet. "
@@ -160,7 +234,7 @@ def gen_part7_single(config: dict) -> list[dict]:
 
     try:
         output = call_groq(system_msg, instruction, max_tokens=4000)
-        return [{"instruction": instruction, "output": output}]
+        return [{"instruction": instruction, "output": output, "system": SYSTEM_MSG_GENERATE}]
     except Exception as e:
         print(f"  [!] Part7 single error: {e}")
         return []
@@ -170,10 +244,18 @@ def gen_part7_multi(config: dict) -> list[dict]:
     level = config["level"]
     n = config["n_sets"]
 
-    instruction = f"Tao {n} bo TOEIC Reading Part 7 Multiple Passages trinh do {level}."
+    rag_context = retrieve_context(
+        f"TOEIC Part 7 multiple passages vocabulary business communication {level}", k=2
+    )
+    rag_section = build_rag_section(rag_context)
+
+    instruction = (
+        f"Tao {n} bo TOEIC Reading Part 7 Multiple Passages trinh do {level}."
+        f"{rag_section}"
+    )
 
     system_msg = (
-        "Ban la giao vien luyen thi TOEIC giàu kinh nghiem tai Viet Nam. "
+        f"{SYSTEM_MSG_GENERATE} "
         "Tao bo doc Part 7 Multiple Passages dung format chuan TOEIC that. "
         "Moi bo gom 2-3 doan van lien quan (email + reply, quang cao + review, memo + schedule). "
         "Moi bo co 5 cau hoi, yeu cau lien ket thong tin giua cac doan. "
@@ -186,26 +268,30 @@ def gen_part7_multi(config: dict) -> list[dict]:
 
     try:
         output = call_groq(system_msg, instruction, max_tokens=4000)
-        return [{"instruction": instruction, "output": output}]
+        return [{"instruction": instruction, "output": output, "system": SYSTEM_MSG_GENERATE}]
     except Exception as e:
         print(f"  [!] Part7 multi error: {e}")
         return []
 
 
 def gen_explanation(topic: str) -> list[dict]:
-    """Sinh 1 cau hoi Part 5 + giai thich theo phong cach thay co Viet."""
+    """Sinh 1 cau hoi Part 5 + giai thich RAG-augmented theo phong cach thay co Viet."""
     samples = []
+
+    rag_context = retrieve_context(f"English grammar rules {topic} examples TOEIC", k=3)
+    rag_section = build_rag_section(rag_context)
 
     instruction_q = (
         f"Tao 1 cau hoi TOEIC Part 5 ve chu de ngu phap: {topic}. "
         "Cau hoi dang dien vao cho trong, 4 dap an A/B/C/D. "
+        f"{rag_section}"
         'Tra ve JSON: {"question": "...", "options": ["A. ...", "B. ...", "C. ...", "D. ..."], "correct_answer": "B"}. '
         "Chi tra ve JSON."
     )
 
     try:
         question_json = call_groq(
-            "Ban la giao vien luyen thi TOEIC Viet Nam.",
+            SYSTEM_MSG_GENERATE,
             instruction_q,
             max_tokens=500,
         )
@@ -226,21 +312,23 @@ def gen_explanation(topic: str) -> list[dict]:
             f"Cau hoi: {question_text}\n"
             f"Dap an: {', '.join(options)}\n"
             f"Dap an dung: {correct}\n"
-            f"Chu de ngu phap: {topic}\n\n"
+            f"Chu de ngu phap: {topic}\n"
+            f"{rag_section}\n"
             "Hay giai thich theo phong cach thay co Viet Nam: than thien, gan gui, "
             "dung vi du doi thuong, co meo ghi nho. "
+            "Khi co tai lieu tham khao, hay trich dan quy tac/vi du tu do. "
             "Bat dau bang 'Em oi' hoac tuong tu."
         )
 
         explanation = call_groq(
-            "Ban la thay giao tieng Anh Viet Nam, giai thich than thien, gan gui, de hieu.",
+            SYSTEM_MSG_EXPLAIN,
             instruction_explain,
             max_tokens=800,
             temp=0.7,
         )
 
-        samples.append({"instruction": instruction_q, "output": question_json})
-        samples.append({"instruction": instruction_explain, "output": explanation})
+        samples.append({"instruction": instruction_q, "output": question_json, "system": SYSTEM_MSG_GENERATE})
+        samples.append({"instruction": instruction_explain, "output": explanation, "system": SYSTEM_MSG_EXPLAIN})
 
     except Exception as e:
         print(f"  [!] Explanation error ({topic}): {e}")
@@ -249,21 +337,25 @@ def gen_explanation(topic: str) -> list[dict]:
 
 
 def to_chat_format(samples: list[dict]) -> list[dict]:
-    return [
-        {
-            "conversations": [
-                {"role": "user", "content": s["instruction"]},
-                {"role": "assistant", "content": s["output"]},
-            ]
-        }
-        for s in samples
-    ]
+    """Chuyen sang chat format voi system message (de model hoc cach xu ly RAG context)."""
+    chat_samples = []
+    for s in samples:
+        conversation = {"conversations": []}
+        if s.get("system"):
+            conversation["conversations"].append({"role": "system", "content": s["system"]})
+        conversation["conversations"].append({"role": "user", "content": s["instruction"]})
+        conversation["conversations"].append({"role": "assistant", "content": s["output"]})
+        chat_samples.append(conversation)
+    return chat_samples
 
 
 def main():
     print("=" * 60)
-    print("ViEng - Sinh dataset fine-tune LLM (TOEIC Part 5/6/7)")
+    print("ViEng - Sinh dataset fine-tune LLM (RAG-augmented)")
+    print("TOEIC Part 5/6/7 + Giai thich co RAG context")
     print("=" * 60)
+
+    init_rag()
 
     all_samples = []
     tasks = []
@@ -301,8 +393,9 @@ def main():
 
     new_count = len(chat_samples)
     total_count = existing_count + new_count
+    rag_status = "CO RAG context" if retriever else "KHONG CO RAG"
     print(f"\n{'=' * 60}")
-    print(f"Mau moi sinh: {new_count}")
+    print(f"Mau moi sinh: {new_count} ({rag_status})")
     print(f"Tong so mau (cong don): {total_count}")
     print(f"Da luu vao: {OUTPUT_FILE}")
     print(f"{'=' * 60}")
