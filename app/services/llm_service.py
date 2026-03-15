@@ -2,7 +2,14 @@ from openai import AsyncOpenAI
 from groq import AsyncGroq
 from app.core.config import get_settings
 from app.models.schemas import Skill, Level, ExamType, ToeicReadingPart
+from app.services.rag_service import rag_service
 from loguru import logger
+
+SYSTEM_PROMPT = (
+    "Bạn là giáo viên luyện thi TOEIC/IELTS chuyên nghiệp tại Việt Nam. "
+    "Khi được cung cấp tài liệu tham khảo, hãy sử dụng nội dung đó để tạo câu hỏi/giải thích chính xác hơn. "
+    "Luôn trả về JSON hợp lệ khi được yêu cầu."
+)
 
 
 class LLMService:
@@ -47,7 +54,7 @@ class LLMService:
             logger.info("Fallback sang Groq/OpenAI API")
             self._hf_model = None
 
-    async def _generate_with_hf(self, prompt: str, max_tokens: int = 1000) -> str:
+    async def _generate_with_hf(self, prompt: str, max_tokens: int = 1000, system_msg: str = "") -> str:
         """Generate text bằng fine-tuned model local."""
         import torch
 
@@ -55,7 +62,11 @@ class LLMService:
         if self._hf_model is None:
             raise RuntimeError("Fine-tuned model chưa sẵn sàng")
 
-        messages = [{"role": "user", "content": prompt}]
+        messages = []
+        if system_msg:
+            messages.append({"role": "system", "content": system_msg})
+        messages.append({"role": "user", "content": prompt})
+
         inputs = self._hf_tokenizer.apply_chat_template(
             messages, tokenize=True, add_generation_prompt=True, return_tensors="pt"
         ).to(self._hf_model.device)
