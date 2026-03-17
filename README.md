@@ -12,6 +12,14 @@
 
 ViEng là ứng dụng web hỗ trợ sinh viên Việt Nam luyện thi TOEIC/IELTS một cách cá nhân hóa, sử dụng AI để tạo bài tập, phân tích lỗi sai, dịch thuật thông minh, và cung cấp feedback tức thì theo phong cách "thầy cô Việt".
 
+### Sơ lược (Technical Highlights)
+
+- **RAG Pipeline**: ChromaDB + HuggingFace embeddings (paraphrase-multilingual) — tra cứu ngữ pháp/từ vựng khi giải thích đáp án
+- **LLM Integration**: Groq (Llama-3.3-70B) / OpenAI (GPT-4o-mini) — tạo đề thi, giải thích, dịch thuật
+- **Fine-tuning**: Qwen2.5-7B với QLoRA + Unsloth trên Colab T4; dataset 500+ mẫu sinh tự động từ Groq API
+- **Token handling**: Batching để sinh đề 100 câu; giải thích on-demand khi user xem từng câu
+- **Stack**: FastAPI, React, LangChain, ChromaDB, sentence-transformers
+
 ### Tính năng chính
 
 - **Tạo đề thi TOEIC đúng format**: Part 5 (Incomplete Sentences), Part 6 (Text Completion), Part 7 (Single & Multiple Passages)
