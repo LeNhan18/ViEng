@@ -1,4 +1,5 @@
 import json
+from pathlib import Path
 from fastapi import APIRouter, HTTPException
 from app.models.schemas import (
     TestRequest, TestResponse, Question,
@@ -216,6 +217,35 @@ async def index_knowledge_base():
     if count == 0:
         return {"message": "Không tìm thấy tài liệu. Thêm file .txt vào data/knowledge_base/"}
     return {"message": f"Đã index {count} chunks vào vectorstore"}
+
+
+@router.get("/rag/list")
+async def list_vectorstore(limit: int = 20, offset: int = 0):
+    """Liệt kê các chunks trong vectorstore (để xem nội dung đã index)."""
+    try:
+        vs = rag_service._get_vectorstore()
+        if vs is None:
+            return {"chunks": [], "total": 0, "message": "Vectorstore chưa được tạo."}
+        collection = vs._collection
+        data = collection.get(include=["documents", "metadatas"])
+        docs = data.get("documents") or []
+        metas = data.get("metadatas") or [{}] * len(docs)
+        total = len(docs)
+        chunks = []
+        for i, (d, m) in enumerate(zip(docs[offset : offset + limit], metas[offset : offset + limit])):
+            src = m.get("source") or "N/A"
+            if isinstance(src, str) and "/" in src:
+                src = src.split("/")[-1].split("\\")[-1]
+            chunks.append({
+                "index": offset + i + 1,
+                "source": src,
+                "content": d[:500] + "..." if len(d) > 500 else d,
+                "length": len(d),
+            })
+        return {"chunks": chunks, "total": total, "limit": limit, "offset": offset}
+    except Exception as e:
+        logger.error(f"Error listing vectorstore: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
 
 
 @router.post("/rag/search")
