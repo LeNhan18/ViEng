@@ -1,6 +1,6 @@
-import { useState } from "react";
-import { translateText } from "../api";
-import { ArrowRightLeft, Loader2, BookOpen, Lightbulb, Copy, Check } from "lucide-react";
+import { useState, useRef } from "react";
+import { translateText, getTtsAudioUrl } from "../api";
+import { ArrowRightLeft, Loader2, BookOpen, Lightbulb, Copy, Check, Volume2 } from "lucide-react";
 
 const DIRECTIONS = [
   { value: "en_to_vi", from: "English", to: "Tiếng Việt", flag: "🇬🇧 → 🇻🇳" },
@@ -22,6 +22,8 @@ export default function Translate() {
   const [result, setResult] = useState(null);
   const [error, setError] = useState("");
   const [copied, setCopied] = useState(false);
+  const [ttsLoading, setTtsLoading] = useState(false);
+  const audioRef = useRef(null);
 
   const dirInfo = DIRECTIONS.find((d) => d.value === direction);
 
@@ -53,6 +55,23 @@ export default function Translate() {
       navigator.clipboard.writeText(result.translated);
       setCopied(true);
       setTimeout(() => setCopied(false), 2000);
+    }
+  }
+
+  async function handlePlayPronunciation() {
+    if (!result?.translated || ttsLoading) return;
+    setTtsLoading(true);
+    try {
+      const url = await getTtsAudioUrl(result.translated);
+      if (audioRef.current) {
+        audioRef.current.src = url;
+        audioRef.current.onended = () => URL.revokeObjectURL(url);
+        await audioRef.current.play();
+      }
+    } catch {
+      // ignore
+    } finally {
+      setTtsLoading(false);
     }
   }
 
@@ -106,6 +125,21 @@ export default function Translate() {
                 <p className="whitespace-pre-wrap text-sm leading-relaxed text-slate-800">
                   {result.translated}
                 </p>
+                {direction === "vi_to_en" && result.translated.trim() && (
+                  <button
+                    onClick={handlePlayPronunciation}
+                    disabled={ttsLoading}
+                    className="mt-3 flex items-center gap-2 rounded-lg bg-indigo-100 px-3 py-2 text-xs font-medium text-indigo-700 transition-all hover:bg-indigo-200 disabled:opacity-50"
+                    title="Nghe phát âm"
+                  >
+                    {ttsLoading ? (
+                      <Loader2 size={14} className="animate-spin" />
+                    ) : (
+                      <Volume2 size={14} />
+                    )}
+                    Đọc phát âm
+                  </button>
+                )}
                 <button
                   onClick={handleCopy}
                   className="absolute right-4 top-4 flex items-center gap-1 rounded-lg bg-white px-2.5 py-1.5 text-xs font-medium text-slate-500 shadow-sm transition-all hover:text-indigo-600"
@@ -113,6 +147,7 @@ export default function Translate() {
                   {copied ? <Check size={14} className="text-green-500" /> : <Copy size={14} />}
                   {copied ? "Đã copy" : "Copy"}
                 </button>
+                <audio ref={audioRef} className="hidden" />
               </div>
             ) : (
               <div className="flex h-full min-h-[140px] items-center justify-center text-sm text-slate-400">
