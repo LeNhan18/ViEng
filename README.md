@@ -22,11 +22,12 @@ ViEng là ứng dụng web hỗ trợ sinh viên Việt Nam luyện thi TOEIC/IE
 
 ### Tính năng chính
 
-- **Tạo đề thi TOEIC đúng format**: Part 5 (Incomplete Sentences), Part 6 (Text Completion), Part 7 (Single & Multiple Passages)
-- **Phân tích và giải thích lỗi**: Feedback chi tiết, thân thiện theo phong cách thầy cô Việt Nam
+- **Reading Part 5/6/7**: Tạo đề thi TOEIC đúng format — Part 5 (Incomplete Sentences), Part 6 (Text Completion), Part 7 (Single & Multiple Passages)
+- **Giải thích theo Part**: Phân tích lỗi khác nhau theo Part 5/6/7 — Part 6/7 hướng về đoạn văn, trích dẫn ngữ cảnh
 - **Chatbot RAG + LLM**: Hỏi đáp ngữ pháp, từ vựng TOEIC/IELTS — AI trả lời dựa trên knowledge base
 - **Dịch thuật AI + RAG**: Dịch Anh-Việt / Việt-Anh thông minh, kèm từ vựng quan trọng và ghi chú ngữ pháp
-- **RAG integration**: Tra cứu knowledge base (grammar rules, từ vựng, collocations) để đảm bảo giải thích chính xác
+- **Phát âm TTS**: Khi dịch Việt→Anh, nút "Đọc phát âm" dùng Edge TTS (miễn phí) để nghe cách đọc tiếng Anh
+- **Knowledge base (.txt + .pdf)**: RAG index từ `data/knowledge_base/` — hỗ trợ file .txt và .pdf
 - **Fine-tune LLM (RAG-augmented)**: Fine-tune Qwen2.5-7B bằng QLoRA + Unsloth, training data có kèm RAG context
 - **RAG-augmented Generation**: Tạo đề thi & giải thích đều sử dụng knowledge base qua RAG pipeline
 
@@ -39,6 +40,7 @@ ViEng là ứng dụng web hỗ trợ sinh viên Việt Nam luyện thi TOEIC/IE
 | LLM | Groq (Llama-3.3-70B) / OpenAI (GPT-4o-mini) / Fine-tuned Qwen2.5-7B |
 | RAG | LangChain + ChromaDB |
 | Embeddings | sentence-transformers (multilingual) |
+| TTS | edge-tts (phát âm tiếng Anh) |
 | Fine-tune | Unsloth + QLoRA (Google Colab T4) |
 | Testing | pytest |
 
@@ -77,7 +79,8 @@ ViEng/
 │   ├── generate_finetune_dataset.py  # Sinh dataset fine-tune từ Groq API
 │   └── download_datasets.py          # Tải dataset từ HuggingFace
 ├── data/
-│   ├── knowledge_base/          # Tài liệu grammar, từ vựng (.txt)
+│   ├── knowledge_base/          # Tài liệu grammar, từ vựng (.txt, .pdf)
+│   ├── vectorstore/             # ChromaDB persist (sau khi index)
 │   └── finetune_dataset.jsonl   # Dataset fine-tune LLM
 ├── tests/
 │   └── test_api.py
@@ -153,6 +156,7 @@ Truy cập:
 | POST | `/api/v1/test/submit` | Nộp bài & nhận feedback + giải thích |
 | POST | `/api/v1/chat` | Chatbot RAG+LLM — hỏi đáp ngữ pháp/từ vựng |
 | POST | `/api/v1/translate` | Dịch thuật AI (EN↔VI) + từ vựng + ngữ pháp |
+| POST | `/api/v1/tts` | Text-to-Speech — phát âm tiếng Anh (Edge TTS) |
 | GET | `/api/v1/rag/list` | Liệt kê chunks trong vectorstore |
 | POST | `/api/v1/rag/index` | Index knowledge base vào vectorstore |
 | POST | `/api/v1/rag/search` | Tìm kiếm trong knowledge base |
@@ -168,11 +172,22 @@ Truy cập:
 | Part 7 Single | Single Passage (đọc hiểu 1 đoạn) | 29 câu |
 | Part 7 Multiple | Multiple Passages (đọc hiểu 2-3 đoạn) | 25 câu (5 bộ × 5 câu) |
 
+## Knowledge Base
+
+Đặt tài liệu vào `data/knowledge_base/`:
+- **.txt**: Grammar, từ vựng, strategies (encoding UTF-8)
+- **.pdf**: Sách, đề thi TOEIC/IELTS (dùng pypdf)
+
+Index vào vectorstore:
+```bash
+POST /api/v1/rag/index
+```
+
 ## Fine-tune LLM (RAG-augmented)
 
 Dự án hỗ trợ fine-tune model Qwen2.5-7B trên Google Colab miễn phí, với **RAG-augmented training data**:
 
-1. **Index knowledge base**: Đảm bảo `data/knowledge_base/` có các file .txt (grammar, vocabulary, strategies)
+1. **Index knowledge base**: Đảm bảo `data/knowledge_base/` có các file .txt hoặc .pdf (grammar, vocabulary, strategies)
 2. **Sinh dataset RAG-augmented**: `python scripts/generate_finetune_dataset.py`
    - Script tự khởi tạo RAG retriever từ knowledge base
    - Mỗi training example có kèm **RAG context** (tài liệu ngữ pháp/từ vựng liên quan)
@@ -202,6 +217,8 @@ pytest tests/ -v
 - [x] Frontend React (Trang chủ, Làm bài, Kết quả, Dịch thuật)
 - [x] TOEIC Reading đúng format Part 5/6/7
 - [x] Chức năng dịch thuật AI + RAG
+- [x] Phát âm TTS (Edge TTS) khi dịch Việt→Anh
+- [x] Knowledge base hỗ trợ .txt + .pdf
 - [x] Script sinh dataset fine-tune
 - [x] Notebook Colab fine-tune (QLoRA + Unsloth)
 - [x] Tích hợp fine-tuned model vào backend
