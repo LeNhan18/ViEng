@@ -19,7 +19,9 @@
 </p>
 
 <p align="center">
-  <video src="Image/ViEng.mp4" controls width="640"></video>
+  <video src="https://raw.githubusercontent.com/LeNhan18/ViEng/main/Image/ViEng.mp4" controls width="640"></video>
+  <br />
+  <em>Nếu video không phát, <a href="https://github.com/LeNhan18/ViEng/blob/main/Image/ViEng.mp4?raw=true">bấm vào đây để xem</a></em>
 </p>
 
 ---
