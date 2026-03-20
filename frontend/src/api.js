@@ -40,3 +40,11 @@ export async function translateText({ text, direction, level, useRag }) {
   });
   return data;
 }
+
+export async function chat({ message, history }) {
+  const { data } = await api.post("/chat", {
+    message,
+    history: history || [],
+  });
+  return data;
+}

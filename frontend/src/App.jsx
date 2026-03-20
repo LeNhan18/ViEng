@@ -4,6 +4,7 @@ import Home from "./pages/Home";
 import Exam from "./pages/Exam";
 import Result from "./pages/Result";
 import Translate from "./pages/Translate";
+import Chat from "./pages/Chat";
 
 export default function App() {
   return (
@@ -13,6 +14,7 @@ export default function App() {
         <Route path="/exam" element={<Exam />} />
         <Route path="/result" element={<Result />} />
         <Route path="/translate" element={<Translate />} />
+        <Route path="/chat" element={<Chat />} />
       </Route>
     </Routes>
   );
