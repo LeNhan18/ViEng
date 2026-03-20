@@ -131,6 +131,8 @@ async def submit_answers(request: SubmitRequest):
         feedbacks = []
         correct_count = 0
 
+        part_value = request.part.value if request.part else None
+
         for answer in request.answers:
             is_correct = (
                 answer.user_answer == answer.correct_answer
@@ -143,6 +145,8 @@ async def submit_answers(request: SubmitRequest):
             options_text = ", ".join(answer.options) if answer.options else ""
 
             rag_query = f"{question_text} {options_text}"
+            if answer.passage:
+                rag_query = f"{answer.passage[:300]} {rag_query}"
             context = rag_service.retrieve(rag_query, k=3)
 
             explanation = await llm_service.explain_answer(
@@ -150,6 +154,8 @@ async def submit_answers(request: SubmitRequest):
                 user_answer=answer.user_answer,
                 correct_answer=answer.correct_answer,
                 context=context,
+                part=part_value,
+                passage=answer.passage or "",
             )
 
             sources = []
