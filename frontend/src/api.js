@@ -43,6 +43,12 @@ export async function translateText({ text, direction, level, useRag }) {
   return data;
 }
 
+/** Lấy URL audio phát âm tiếng Anh (TTS). Trả về blob URL để dùng với <audio src>. */
+export async function getTtsAudioUrl(text) {
+  const { data } = await api.post("/tts", { text }, { responseType: "blob" });
+  return URL.createObjectURL(data);
+}
+
 export async function chat({ message, history }) {
   const { data } = await api.post("/chat", {
     message,
