@@ -1,7 +1,8 @@
 import json
 import re
 from pathlib import Path
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Body
+from fastapi.responses import Response
 from app.models.schemas import (
     TestRequest, TestResponse, Question,
     Part6Passage, Part7Passage, ToeicReadingSection,
@@ -185,6 +186,26 @@ async def submit_answers(request: SubmitRequest):
     except Exception as e:
         logger.error(f"Error submitting answers: {e}")
         raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/tts")
+async def text_to_speech(text: str = Body(..., embed=True, min_length=1, max_length=2000)):
+    """Chuyển text tiếng Anh thành audio (phát âm) — dùng Edge TTS miễn phí."""
+    try:
+        import edge_tts
+        communicate = edge_tts.Communicate(text.strip(), "en-US-AriaNeural")
+        audio_data = bytearray()
+        async for chunk in communicate.stream():
+            if chunk.get("type") == "audio":
+                audio_data.extend(chunk["data"])
+        return Response(
+            content=bytes(audio_data),
+            media_type="audio/mpeg",
+            headers={"Content-Disposition": "inline; filename=speech.mp3"},
+        )
+    except Exception as e:
+        logger.error(f"TTS error: {e}")
+        raise HTTPException(status_code=500, detail=f"Không thể tạo audio: {str(e)}")
 
 
 @router.post("/translate", response_model=TranslateResponse)
