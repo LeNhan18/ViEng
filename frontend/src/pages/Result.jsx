@@ -11,7 +11,7 @@ export default function Result() {
 
   if (!state) return <Navigate to="/exam" />;
 
-  const { config, questions, answers, score } = state;
+  const { config, questions, answers, score, readingSection } = state;
   const total = questions.length;
   const percentage = Math.round((score / total) * 100);
 
@@ -27,20 +27,48 @@ export default function Result() {
     return "from-red-500 to-rose-600";
   };
 
+  function findPassageForQuestion(questionId) {
+    if (!readingSection || !config.part) return null;
+    const part = config.part;
+
+    if (part === "part6" && readingSection.part6) {
+      for (const p of readingSection.part6) {
+        if (p.questions?.some((pq) => pq.id === questionId)) {
+          return p.passage || "";
+        }
+      }
+    }
+
+    const part7list = part === "part7_single" ? readingSection.part7_single : readingSection.part7_multiple;
+    if (part7list) {
+      for (const p of part7list) {
+        if (p.questions?.some((pq) => pq.id === questionId)) {
+          return Array.isArray(p.passages) ? p.passages.join("\n\n") : p.passages || "";
+        }
+      }
+    }
+    return null;
+  }
+
   async function loadFeedback() {
     setLoadingFeedback(true);
     try {
-      const answerList = questions.map((q) => ({
-        question_id: q.id,
-        user_answer: answers[q.id] || "",
-        question_content: q.content || "",
-        correct_answer: q.correct_answer || "",
-        options: q.options || [],
-      }));
+      const answerList = questions.map((q) => {
+        const passage = findPassageForQuestion(q.id);
+        return {
+          question_id: q.id,
+          user_answer: answers[q.id] || "",
+          question_content: q.content || "",
+          correct_answer: q.correct_answer || "",
+          options: q.options || [],
+          passage: passage || "",
+        };
+      });
       const data = await submitAnswers({
         examType: config.examType,
         skill: config.skill,
         answers: answerList,
+        part: config.part,
       });
       setFeedback(data);
     } catch {
