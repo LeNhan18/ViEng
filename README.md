@@ -18,6 +18,10 @@
   <img src="https://img.shields.io/badge/License-MIT-green?style=flat-square" alt="License" />
 </p>
 
+<p align="center">
+  <video src="Image/ViEng.mp4" controls width="640"></video>
+</p>
+
 ---
 
 ## Mục lục
