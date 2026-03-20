@@ -1,106 +1,119 @@
 <p align="center">
-  <img src="Image/logoViEng.jpg" alt="ViEng Logo" width="200" />
+  <img src="Image/logoViEng.jpg" alt="ViEng Logo" width="180" />
 </p>
 
-<h1 align="center">ViEng - Trợ lý luyện thi tiếng Anh AI</h1>
+<h1 align="center">ViEng</h1>
+<p align="center">
+  <strong>AI-Powered English Exam Preparation Platform</strong>
+</p>
+<p align="center">
+  Trợ lý luyện thi TOEIC/IELTS cho sinh viên Việt Nam
+</p>
 
 <p align="center">
-  <strong>Cho sinh viên Việt Nam</strong>
+  <img src="https://img.shields.io/badge/Python-3.11+-3776AB?style=flat-square&logo=python&logoColor=white" alt="Python" />
+  <img src="https://img.shields.io/badge/FastAPI-009688?style=flat-square&logo=fastapi&logoColor=white" alt="FastAPI" />
+  <img src="https://img.shields.io/badge/React-61DAFB?style=flat-square&logo=react&logoColor=black" alt="React" />
+  <img src="https://img.shields.io/badge/Flutter-02569B?style=flat-square&logo=flutter&logoColor=white" alt="Flutter" />
+  <img src="https://img.shields.io/badge/License-MIT-green?style=flat-square" alt="License" />
 </p>
+
+---
+
+## Mục lục
+
+- [Giới thiệu](#giới-thiệu)
+- [Tính năng](#tính-năng)
+- [Tech Stack](#tech-stack)
+- [Cài đặt](#cài-đặt)
+- [Cấu hình](#cấu-hình)
+- [API Reference](#api-reference)
+- [Knowledge Base](#knowledge-base)
+- [Fine-tuning](#fine-tuning)
+- [Roadmap](#roadmap)
+- [License](#license)
+
+---
 
 ## Giới thiệu
 
-ViEng là ứng dụng web hỗ trợ sinh viên Việt Nam luyện thi TOEIC/IELTS một cách cá nhân hóa, sử dụng AI để tạo bài tập, phân tích lỗi sai, dịch thuật thông minh, và cung cấp feedback tức thì theo phong cách "thầy cô Việt".
+**ViEng** là nền tảng luyện thi tiếng Anh sử dụng AI, được thiết kế riêng cho sinh viên Việt Nam. Có **web** (React) và **mobile** (Flutter Android). Ứng dụng kết hợp **RAG (Retrieval-Augmented Generation)** với **Large Language Models** để tạo đề thi chuẩn TOEIC/IELTS, giải thích đáp án theo ngữ cảnh, dịch thuật thông minh và chatbot hỏi đáp — tất cả theo phong cách "thầy cô Việt" thân thiện, dễ hiểu.
 
-### Sơ lược (Technical Highlights)
+### Điểm nổi bật kỹ thuật
 
-- **RAG Pipeline**: ChromaDB + HuggingFace embeddings (paraphrase-multilingual) — tra cứu ngữ pháp/từ vựng khi giải thích đáp án
-- **LLM Integration**: Groq (Llama-3.3-70B) / OpenAI (GPT-4o-mini) — tạo đề thi, giải thích, dịch thuật
-- **Fine-tuning**: Qwen2.5-7B với QLoRA + Unsloth trên Colab T4; dataset 500+ mẫu sinh tự động từ Groq API
-- **Token handling**: Batching để sinh đề 100 câu; giải thích on-demand khi user xem từng câu
-- **Stack**: FastAPI, React, LangChain, ChromaDB, sentence-transformers
+| Thành phần | Mô tả |
+|------------|-------|
+| **RAG Pipeline** | ChromaDB + sentence-transformers (multilingual) — truy xuất ngữ pháp/từ vựng từ knowledge base khi tạo đề và giải thích |
+| **LLM** | Groq (Llama-3.3-70B) / OpenAI (GPT-4o-mini) / Fine-tuned Qwen2.5-7B |
+| **Fine-tuning** | QLoRA + Unsloth trên Colab T4; dataset 500+ mẫu RAG-augmented |
+| **TTS** | Edge TTS (miễn phí) — phát âm tiếng Anh khi dịch Việt→Anh |
 
-### Tính năng chính
+---
 
-- **Reading Part 5/6/7**: Tạo đề thi TOEIC đúng format — Part 5 (Incomplete Sentences), Part 6 (Text Completion), Part 7 (Single & Multiple Passages)
-- **Giải thích theo Part**: Phân tích lỗi khác nhau theo Part 5/6/7 — Part 6/7 hướng về đoạn văn, trích dẫn ngữ cảnh
-- **Chatbot RAG + LLM**: Hỏi đáp ngữ pháp, từ vựng TOEIC/IELTS — AI trả lời dựa trên knowledge base
-- **Dịch thuật AI + RAG**: Dịch Anh-Việt / Việt-Anh thông minh, kèm từ vựng quan trọng và ghi chú ngữ pháp
-- **Phát âm TTS**: Khi dịch Việt→Anh, nút "Đọc phát âm" dùng Edge TTS (miễn phí) để nghe cách đọc tiếng Anh
-- **Knowledge base (.txt + .pdf)**: RAG index từ `data/knowledge_base/` — hỗ trợ file .txt và .pdf
-- **Fine-tune LLM (RAG-augmented)**: Fine-tune Qwen2.5-7B bằng QLoRA + Unsloth, training data có kèm RAG context
-- **RAG-augmented Generation**: Tạo đề thi & giải thích đều sử dụng knowledge base qua RAG pipeline
+## Tính năng
+
+### Làm bài thi TOEIC Reading
+
+- **Part 5** — Incomplete Sentences (hoàn thành câu)
+- **Part 6** — Text Completion (hoàn thành đoạn văn)
+- **Part 7** — Single & Multiple Passages (đọc hiểu)
+
+Đề thi được sinh đúng format chuẩn TOEIC, có RAG context từ knowledge base.
+
+### Giải thích theo từng Part
+
+- **Part 5**: Tập trung ngữ pháp, từ vựng trong câu đơn
+- **Part 6 & 7**: Hướng về đoạn văn — trích dẫn ngữ cảnh, mạch văn, chứng minh đáp án
+
+### Chatbot RAG + LLM
+
+Hỏi đáp ngữ pháp, từ vựng TOEIC/IELTS — AI trả lời dựa trên knowledge base, có nguồn tham khảo.
+
+### Dịch thuật AI
+
+- Dịch Anh↔Việt thông minh
+- Kèm từ vựng quan trọng và ghi chú ngữ pháp
+- **Phát âm TTS**: Nút "Đọc phát âm" khi dịch Việt→Anh (Edge TTS)
+
+### Knowledge Base
+
+- Hỗ trợ **.txt** và **.pdf**
+- Index vào ChromaDB để RAG sử dụng khi tạo đề, giải thích, chatbot
+
+---
 
 ## Tech Stack
 
-| Thành phần | Công nghệ |
-|---|---|
-| Backend | Python 3.11 + FastAPI |
-| Frontend | React 19 + Vite 6 + TailwindCSS 4 |
-| LLM | Groq (Llama-3.3-70B) / OpenAI (GPT-4o-mini) / Fine-tuned Qwen2.5-7B |
-| RAG | LangChain + ChromaDB |
-| Embeddings | sentence-transformers (multilingual) |
-| TTS | edge-tts (phát âm tiếng Anh) |
-| Fine-tune | Unsloth + QLoRA (Google Colab T4) |
-| Testing | pytest |
+| Layer | Công nghệ |
+|-------|-----------|
+| **Backend** | Python 3.11, FastAPI |
+| **Web** | React 19, Vite 6, TailwindCSS 4 |
+| **Mobile** | Flutter (Android) |
+| **LLM** | Groq / OpenAI / HuggingFace (fine-tuned) |
+| **RAG** | LangChain, ChromaDB |
+| **Embeddings** | sentence-transformers (paraphrase-multilingual-MiniLM) |
+| **TTS** | edge-tts |
+| **Fine-tune** | Unsloth, QLoRA |
 
-## Cấu trúc dự án
-
-```
-ViEng/
-├── app/
-│   ├── main.py                  # FastAPI entry point
-│   ├── api/
-│   │   └── routes.py            # API endpoints
-│   ├── core/
-│   │   └── config.py            # Settings & environment
-│   ├── models/
-│   │   └── schemas.py           # Pydantic data models
-│   ├── services/
-│   │   ├── llm_service.py       # LLM integration (Groq/OpenAI/HF)
-│   │   └── rag_service.py       # RAG pipeline (ChromaDB)
-│   └── utils/
-├── frontend/
-│   ├── src/
-│   │   ├── pages/
-│   │   │   ├── Home.jsx         # Trang chủ
-│   │   │   ├── Exam.jsx         # Làm bài thi TOEIC Part 5/6/7
-│   │   │   ├── Result.jsx       # Kết quả + feedback
-│   │   │   ├── Chat.jsx         # Chatbot RAG+LLM
-│   │   │   └── Translate.jsx    # Dịch thuật AI
-│   │   ├── components/
-│   │   │   └── Layout.jsx       # Layout chung (header, nav, footer)
-│   │   ├── api.js               # API client (axios)
-│   │   ├── App.jsx              # Router chính
-│   │   └── main.jsx             # Entry point React
-│   ├── package.json
-│   └── vite.config.js
-├── scripts/
-│   ├── generate_finetune_dataset.py  # Sinh dataset fine-tune từ Groq API
-│   └── download_datasets.py          # Tải dataset từ HuggingFace
-├── data/
-│   ├── knowledge_base/          # Tài liệu grammar, từ vựng (.txt, .pdf)
-│   ├── vectorstore/             # ChromaDB persist (sau khi index)
-│   └── finetune_dataset.jsonl   # Dataset fine-tune LLM
-├── tests/
-│   └── test_api.py
-├── FineTune_ViEng.ipynb         # Notebook Colab fine-tune LLM
-├── .env.example
-├── .gitignore
-├── requirements.txt
-└── README.md
-```
+---
 
 ## Cài đặt
 
-### 1. Clone repo
+### Yêu cầu
+
+- Python 3.11+
+- Node.js 18+ (cho web)
+- Flutter SDK (cho mobile)
+- API key: Groq hoặc OpenAI
+
+### Bước 1: Clone repository
 
 ```bash
 git clone https://github.com/LeNhan18/ViEng.git
 cd ViEng
 ```
 
-### 2. Backend
+### Bước 2: Backend
 
 ```bash
 python -m venv venv
@@ -108,13 +121,13 @@ python -m venv venv
 # Windows
 venv\Scripts\activate
 
-# macOS/Linux
+# macOS / Linux
 source venv/bin/activate
 
 pip install -r requirements.txt
 ```
 
-### 3. Frontend
+### Bước 3: Web (React)
 
 ```bash
 cd frontend
@@ -122,115 +135,154 @@ npm install --legacy-peer-deps
 cd ..
 ```
 
-### 4. Cấu hình environment
+### Bước 4: Mobile (Flutter)
 
 ```bash
-cp .env.example .env
+cd androidfrontend
+flutter pub get
+cd ..
 ```
 
-Mở file `.env` và thêm API key:
-- **Groq** (miễn phí): Đăng ký tại [console.groq.com](https://console.groq.com) để lấy `GROQ_API_KEY`
-- **OpenAI** (trả phí): Thêm `OPENAI_API_KEY` nếu muốn dùng GPT
+### Bước 5: Chạy ứng dụng
 
-### 5. Chạy ứng dụng
-
+**Web:**
 ```bash
-# Terminal 1 - Backend
+# Terminal 1 — Backend
 uvicorn app.main:app --reload
 
-# Terminal 2 - Frontend
-cd frontend
-npm run dev
+# Terminal 2 — Web
+cd frontend && npm run dev
 ```
 
-Truy cập:
-- Frontend: http://localhost:5173
-- API Swagger: http://localhost:8000/docs
+**Mobile:**
+```bash
+# Backend phải chạy trước
+cd androidfrontend && flutter run
+```
 
-## API Endpoints
+| URL / Platform | Mô tả |
+|----------------|-------|
+| http://localhost:5173 | Ứng dụng web |
+| http://localhost:8000/docs | API Swagger |
+| Android | Flutter app (androidfrontend) |
+
+---
+
+## Cấu hình
+
+1. Sao chép file môi trường:
+   ```bash
+   cp .env.example .env
+   ```
+
+2. Cấu hình API key trong `.env`:
+
+   | Biến | Mô tả |
+   |------|-------|
+   | `GROQ_API_KEY` | [Groq Console](https://console.groq.com) — miễn phí |
+   | `OPENAI_API_KEY` | [OpenAI](https://platform.openai.com) — trả phí |
+
+3. (Tùy chọn) Fine-tuned model:
+   ```env
+   USE_FINETUNED_MODEL=true
+   HF_MODEL_NAME=LeNhan18/ViEng-Qwen2.5-7B-lora
+   ```
+
+---
+
+## API Reference
 
 | Method | Endpoint | Mô tả |
-|---|---|---|
-| GET | `/api/v1/health` | Health check |
-| POST | `/api/v1/test/generate` | Tạo đề thi TOEIC/IELTS (Part 5/6/7) |
-| POST | `/api/v1/test/submit` | Nộp bài & nhận feedback + giải thích |
-| POST | `/api/v1/chat` | Chatbot RAG+LLM — hỏi đáp ngữ pháp/từ vựng |
-| POST | `/api/v1/translate` | Dịch thuật AI (EN↔VI) + từ vựng + ngữ pháp |
-| POST | `/api/v1/tts` | Text-to-Speech — phát âm tiếng Anh (Edge TTS) |
-| GET | `/api/v1/rag/list` | Liệt kê chunks trong vectorstore |
-| POST | `/api/v1/rag/index` | Index knowledge base vào vectorstore |
-| POST | `/api/v1/rag/search` | Tìm kiếm trong knowledge base |
+|--------|----------|-------|
+| `GET` | `/api/v1/health` | Health check |
+| `POST` | `/api/v1/test/generate` | Tạo đề thi TOEIC (Part 5/6/7) |
+| `POST` | `/api/v1/test/submit` | Nộp bài, nhận feedback + giải thích |
+| `POST` | `/api/v1/chat` | Chatbot RAG — hỏi đáp ngữ pháp/từ vựng |
+| `POST` | `/api/v1/translate` | Dịch thuật AI (EN↔VI) + từ vựng + ngữ pháp |
+| `POST` | `/api/v1/tts` | Text-to-Speech — phát âm tiếng Anh |
+| `GET` | `/api/v1/rag/list` | Liệt kê chunks trong vectorstore |
+| `POST` | `/api/v1/rag/index` | Index knowledge base |
+| `POST` | `/api/v1/rag/search` | Tìm kiếm trong knowledge base |
 
-## TOEIC Reading Format
-
-Đề thi được sinh đúng format chuẩn TOEIC:
-
-| Part | Dạng bài | Số câu chuẩn |
-|---|---|---|
-| Part 5 | Incomplete Sentences (hoàn thành câu) | 30 câu |
-| Part 6 | Text Completion (hoàn thành đoạn văn) | 16 câu (4 đoạn × 4 câu) |
-| Part 7 Single | Single Passage (đọc hiểu 1 đoạn) | 29 câu |
-| Part 7 Multiple | Multiple Passages (đọc hiểu 2-3 đoạn) | 25 câu (5 bộ × 5 câu) |
+---
 
 ## Knowledge Base
 
 Đặt tài liệu vào `data/knowledge_base/`:
-- **.txt**: Grammar, từ vựng, strategies (encoding UTF-8)
-- **.pdf**: Sách, đề thi TOEIC/IELTS (dùng pypdf)
+
+| Định dạng | Ghi chú |
+|-----------|---------|
+| `.txt` | Grammar, từ vựng, strategies — encoding UTF-8 |
+| `.pdf` | Sách, đề thi TOEIC/IELTS (pypdf) |
 
 Index vào vectorstore:
-```bash
-POST /api/v1/rag/index
-```
-
-## Fine-tune LLM (RAG-augmented)
-
-Dự án hỗ trợ fine-tune model Qwen2.5-7B trên Google Colab miễn phí, với **RAG-augmented training data**:
-
-1. **Index knowledge base**: Đảm bảo `data/knowledge_base/` có các file .txt hoặc .pdf (grammar, vocabulary, strategies)
-2. **Sinh dataset RAG-augmented**: `python scripts/generate_finetune_dataset.py`
-   - Script tự khởi tạo RAG retriever từ knowledge base
-   - Mỗi training example có kèm **RAG context** (tài liệu ngữ pháp/từ vựng liên quan)
-   - Model học cách **sử dụng retrieved context** khi generate
-3. **Upload** file `data/finetune_dataset.jsonl` lên Colab
-4. **Mở** `FineTune_ViEng.ipynb` trên Colab (chọn GPU T4)
-5. **Chạy** từng cell: cài thư viện → load model → train → lưu adapter
-
-Sau fine-tune, bật trong `.env`:
-```env
-USE_FINETUNED_MODEL=true
-HF_MODEL_NAME=LeNhan18/ViEng-Qwen2.5-7B-lora
-```
-
-## Chạy tests
 
 ```bash
-pytest tests/ -v
+curl -X POST http://localhost:8000/api/v1/rag/index
 ```
+
+---
+
+## Fine-tuning
+
+ViEng hỗ trợ fine-tune Qwen2.5-7B với **RAG-augmented data** trên Google Colab:
+
+1. **Index knowledge base** — đảm bảo `data/knowledge_base/` có file .txt hoặc .pdf
+2. **Sinh dataset** — `python scripts/generate_finetune_dataset.py`
+3. **Upload** `data/finetune_dataset.jsonl` lên Colab
+4. **Chạy** `FineTune_ViEng.ipynb` (GPU T4)
+
+Chi tiết xem trong notebook.
+
+---
+
+## Cấu trúc dự án
+
+```
+ViEng/
+├── app/                # Backend FastAPI
+│   ├── main.py
+│   ├── api/routes.py
+│   ├── core/config.py
+│   ├── models/schemas.py
+│   └── services/
+│       ├── llm_service.py
+│       └── rag_service.py
+├── frontend/           # Web React
+│   └── src/
+│       ├── pages/     # Home, Exam, Result, Chat, Translate
+│       └── components/
+├── androidfrontend/    # Mobile Flutter (Android)
+├── data/
+│   ├── knowledge_base/ # .txt, .pdf
+│   └── vectorstore/    # ChromaDB
+├── scripts/
+└── tests/
+```
+
+---
 
 ## Roadmap
 
-- [x] Cấu trúc dự án & API cơ bản
-- [x] Tích hợp LLM (Groq/OpenAI) tạo đề + giải thích
-- [x] Knowledge base (20+ file grammar, vocabulary, strategies)
-- [x] RAG pipeline (ChromaDB + embeddings)
-- [x] Frontend React (Trang chủ, Làm bài, Kết quả, Dịch thuật)
-- [x] TOEIC Reading đúng format Part 5/6/7
-- [x] Chức năng dịch thuật AI + RAG
-- [x] Phát âm TTS (Edge TTS) khi dịch Việt→Anh
-- [x] Knowledge base hỗ trợ .txt + .pdf
-- [x] Script sinh dataset fine-tune
-- [x] Notebook Colab fine-tune (QLoRA + Unsloth)
-- [x] Tích hợp fine-tuned model vào backend
-- [ ] Thêm dữ liệu đề thi TOEIC thật vào knowledge base
-- [ ] Lưu trữ session & tiến độ học tập
-- [ ] IELTS Reading/Writing format
-- [ ] Voice mode (Whisper)
+| Trạng thái | Tính năng |
+|------------|-----------|
+| Done | TOEIC Reading Part 5/6/7 |
+| Done | RAG pipeline + Knowledge base (.txt, .pdf) |
+| Done | Chatbot RAG + LLM |
+| Done | Dịch thuật + TTS phát âm |
+| Done | Fine-tune Qwen2.5-7B (RAG-augmented) |
+| Planned | TOEIC Listening (Part 1–4) |
+| Planned | IELTS Reading/Writing |
+| Planned | Lưu session & tiến độ học tập |
 
-## Đối tượng sử dụng
+---
 
-Sinh viên đại học, người đi làm cần chứng chỉ TOEIC/IELTS.
+## Đối tượng
+
+Sinh viên đại học, người đi làm cần chứng chỉ TOEIC/IELTS tại Việt Nam.
+
+---
 
 ## License
 
-MIT
+MIT License — xem [LICENSE](LICENSE) để biết chi tiết.
