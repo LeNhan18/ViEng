@@ -17,12 +17,14 @@ export async function generateTest({ examType, skill, level, numQuestions, part 
   return data;
 }
 
-export async function submitAnswers({ examType, skill, answers }) {
-  const { data } = await api.post("/test/submit", {
+export async function submitAnswers({ examType, skill, answers, part }) {
+  const body = {
     exam_type: examType,
     skill,
     answers,
-  });
+  };
+  if (part) body.part = part;
+  const { data } = await api.post("/test/submit", body);
   return data;
 }
 
