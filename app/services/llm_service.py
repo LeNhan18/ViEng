@@ -266,12 +266,39 @@ class LLMService:
         )
         return await self._call_llm(prompt)
 
+    def _part_explanation_guidance(self, part: str | None) -> str:
+        """Hướng dẫn giải thích khác nhau theo Part 5/6/7."""
+        if not part:
+            return ""
+        p = (part or "").lower()
+        if p == "part5":
+            return (
+                "Part 5: 1 câu có chỗ trống.\n"
+                "Giải thích tập trung vào: ngữ pháp (thì, dạng từ, giới từ, mệnh đề quan hệ...) hoặc từ vựng trong câu đó."
+            )
+        if p == "part6":
+            return (
+                "Part 6: đoạn văn có chỗ trống.\n"
+                "BẮT BUỘC giải thích dựa trên đoạn văn: phải trích dẫn ngữ cảnh trong đoạn, nối liền với câu trước/sau, "
+                "tâm lý người viết, mạch văn. Không chỉ giải thích câu đơn lẻ."
+            )
+        if p in ("part7_single", "part7_multiple"):
+            return (
+                "Part 7: bài đọc + câu hỏi đọc hiểu.\n"
+                "BẮT BUỘC giải thích dựa trên đoạn văn: trích dẫn câu/đoạn trong bài đọc chứng minh đáp án, "
+                "phân tích ngữ cảnh, ý chính, chi tiết, suy luận. Không chỉ dựa vào câu hỏi."
+            )
+        return ""
+
     async def explain_answer(
         self,
         question: str,
         user_answer: str,
         correct_answer: str,
         context: str = "",
+        *,
+        part: str | None = None,
+        passage: str = "",
     ) -> str:
         prompt = (
             f"Bạn là thầy giáo tiếng Anh Việt Nam, giải thích thân thiện, gần gũi.\n\n"
@@ -279,11 +306,17 @@ class LLMService:
             f"Đáp án của học sinh: {user_answer}\n"
             f"Đáp án đúng: {correct_answer}\n"
         )
+        if passage:
+            prompt += f"\n--- ĐOẠN VĂN (ngữ cảnh bắt buộc dùng khi giải thích):\n{passage}\n---\n"
         if context:
             prompt += f"\nTài liệu tham khảo:\n{context}\n"
 
+        guidance = self._part_explanation_guidance(part)
+        if guidance:
+            prompt += f"\n{guidance}\n\n"
+
         prompt += (
-            "\nHãy giải thích:\n"
+            "Hãy giải thích:\n"
             "1. Tại sao đáp án đúng là như vậy\n"
             "2. Tại sao đáp án của học sinh sai (nếu sai)\n"
             "3. Mẹo ghi nhớ hoặc quy tắc liên quan\n"

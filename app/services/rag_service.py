@@ -1,7 +1,7 @@
 from langchain_community.vectorstores import Chroma
 from langchain_community.embeddings import HuggingFaceEmbeddings
 from langchain_text_splitters import RecursiveCharacterTextSplitter
-from langchain_community.document_loaders import DirectoryLoader, TextLoader
+from langchain_community.document_loaders import DirectoryLoader, TextLoader, PyPDFLoader
 from app.core.config import get_settings
 from loguru import logger
 from pathlib import Path
@@ -42,10 +42,12 @@ class RAGService:
         return self._vectorstore
 
     def index_knowledge_base(self, docs_dir: str = "data/knowledge_base") -> int:
-        """Đọc tài liệu từ thư mục, chia chunks, tạo embeddings và lưu vào ChromaDB."""
+        """Đọc tài liệu từ thư mục (.txt, .pdf), chia chunks, tạo embeddings và lưu vào ChromaDB."""
         docs_path = Path(docs_dir)
-        if not docs_path.exists() or not any(docs_path.glob("*.txt")):
-            logger.warning(f"Không tìm thấy tài liệu .txt trong {docs_dir}")
+        has_txt = any(docs_path.glob("**/*.txt")) or any(docs_path.glob("**/IELTS_writting_band_decriptors"))
+        has_pdf = any(docs_path.glob("**/*.pdf"))
+        if not docs_path.exists() or (not has_txt and not has_pdf):
+            logger.warning(f"Không tìm thấy tài liệu .txt hoặc .pdf trong {docs_dir}")
             return 0
 
         persist_path = Path(self._persist_dir)
@@ -55,21 +57,33 @@ class RAGService:
             logger.info(f"Đã xóa vectorstore cũ tại {self._persist_dir} để index lại từ đầu")
         persist_path.mkdir(parents=True, exist_ok=True)
 
-        all_txt = list(docs_path.glob("**/*.txt")) + list(docs_path.glob("**/IELTS_writting_band_decriptors"))
-        loader = DirectoryLoader(
-            docs_dir,
-            glob=["**/*.txt", "**/IELTS_writting_band_decriptors"],
-            loader_cls=TextLoader,
-            loader_kwargs={"encoding": "utf-8"},
-        )
-        documents = loader.load()
+        documents: list = []
+
+        # Load .txt
+        if has_txt:
+            txt_loader = DirectoryLoader(
+                docs_dir,
+                glob=["**/*.txt", "**/IELTS_writting_band_decriptors"],
+                loader_cls=TextLoader,
+                loader_kwargs={"encoding": "utf-8"},
+            )
+            documents.extend(txt_loader.load())
+
+        # Load .pdf
+        for pdf_file in sorted(docs_path.glob("**/*.pdf")):
+            try:
+                docs = PyPDFLoader(str(pdf_file)).load()
+                documents.extend(docs)
+                logger.info(f"Đã load PDF: {pdf_file.name} ({len(docs)} trang)")
+            except Exception as e:
+                logger.warning(f"Không load được PDF {pdf_file.name}: {e}")
+
+        if not documents:
+            logger.warning("Không load được tài liệu nào")
+            return 0
 
         loaded_names = sorted({Path(d.metadata.get("source", "")).name for d in documents if d.metadata.get("source")})
-        logger.info(f"Đã load {len(documents)} file: {', '.join(loaded_names[:8])}{'...' if len(loaded_names) > 8 else ''}")
-        if len(all_txt) > len(documents):
-            missing = [f.name for f in all_txt if f.name not in loaded_names]
-            if missing:
-                logger.warning(f"File bị bỏ qua (có thể lỗi encoding): {missing}")
+        logger.info(f"Đã load {len(documents)} doc từ {len(loaded_names)} file: {', '.join(loaded_names[:10])}{'...' if len(loaded_names) > 10 else ''}")
 
         splitter = RecursiveCharacterTextSplitter(
             chunk_size=500,
