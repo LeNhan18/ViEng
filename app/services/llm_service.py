@@ -353,5 +353,37 @@ class LLMService:
                 "grammar_notes": [],
             }
 
+    async def chat(self, message: str, history: list[dict], rag_context: str = "") -> str:
+        """Chat với RAG context. Dùng knowledge base để trả lời câu hỏi ngữ pháp/từ vựng TOEIC/IELTS."""
+        system_content = (
+            "Bạn là trợ lý AI luyện thi TOEIC/IELTS tại Việt Nam. "
+            "Trả lời thân thiện, dễ hiểu, theo phong cách thầy cô Việt. "
+            "Khi được cung cấp tài liệu tham khảo, hãy dựa vào đó để trả lời chính xác. "
+            "Nếu không có thông tin trong tài liệu, vẫn trả lời dựa trên kiến thức của bạn."
+        )
+        if rag_context:
+            system_content += f"\n\nTài liệu tham khảo:\n---\n{rag_context}\n---"
+
+        messages = [{"role": "system", "content": system_content}]
+        for h in history[-10:]:
+            messages.append({"role": h["role"], "content": h["content"]})
+        messages.append({"role": "user", "content": message})
+
+        if self._use_finetuned:
+            prompt = "\n".join(
+                f"{'User' if m['role']=='user' else 'Assistant'}: {m['content']}"
+                for m in messages[1:]
+            )
+            return await self._generate_with_hf(prompt, max_tokens=1500, system_msg=system_content)
+
+        client, model = self._client_and_model
+        response = await client.chat.completions.create(
+            model=model,
+            messages=messages,
+            temperature=0.7,
+            max_tokens=1500,
+        )
+        return response.choices[0].message.content
+
 
 llm_service = LLMService()

@@ -48,13 +48,28 @@ class RAGService:
             logger.warning(f"Không tìm thấy tài liệu .txt trong {docs_dir}")
             return 0
 
+        persist_path = Path(self._persist_dir)
+        if persist_path.exists():
+            import shutil
+            shutil.rmtree(persist_path)
+            logger.info(f"Đã xóa vectorstore cũ tại {self._persist_dir} để index lại từ đầu")
+        persist_path.mkdir(parents=True, exist_ok=True)
+
+        all_txt = list(docs_path.glob("**/*.txt")) + list(docs_path.glob("**/IELTS_writting_band_decriptors"))
         loader = DirectoryLoader(
             docs_dir,
-            glob="**/*.txt",
+            glob=["**/*.txt", "**/IELTS_writting_band_decriptors"],
             loader_cls=TextLoader,
             loader_kwargs={"encoding": "utf-8"},
         )
         documents = loader.load()
+
+        loaded_names = sorted({Path(d.metadata.get("source", "")).name for d in documents if d.metadata.get("source")})
+        logger.info(f"Đã load {len(documents)} file: {', '.join(loaded_names[:8])}{'...' if len(loaded_names) > 8 else ''}")
+        if len(all_txt) > len(documents):
+            missing = [f.name for f in all_txt if f.name not in loaded_names]
+            if missing:
+                logger.warning(f"File bị bỏ qua (có thể lỗi encoding): {missing}")
 
         splitter = RecursiveCharacterTextSplitter(
             chunk_size=500,
