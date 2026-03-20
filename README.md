@@ -24,6 +24,7 @@ ViEng là ứng dụng web hỗ trợ sinh viên Việt Nam luyện thi TOEIC/IE
 
 - **Tạo đề thi TOEIC đúng format**: Part 5 (Incomplete Sentences), Part 6 (Text Completion), Part 7 (Single & Multiple Passages)
 - **Phân tích và giải thích lỗi**: Feedback chi tiết, thân thiện theo phong cách thầy cô Việt Nam
+- **Chatbot RAG + LLM**: Hỏi đáp ngữ pháp, từ vựng TOEIC/IELTS — AI trả lời dựa trên knowledge base
 - **Dịch thuật AI + RAG**: Dịch Anh-Việt / Việt-Anh thông minh, kèm từ vựng quan trọng và ghi chú ngữ pháp
 - **RAG integration**: Tra cứu knowledge base (grammar rules, từ vựng, collocations) để đảm bảo giải thích chính xác
 - **Fine-tune LLM (RAG-augmented)**: Fine-tune Qwen2.5-7B bằng QLoRA + Unsloth, training data có kèm RAG context
@@ -63,6 +64,7 @@ ViEng/
 │   │   │   ├── Home.jsx         # Trang chủ
 │   │   │   ├── Exam.jsx         # Làm bài thi TOEIC Part 5/6/7
 │   │   │   ├── Result.jsx       # Kết quả + feedback
+│   │   │   ├── Chat.jsx         # Chatbot RAG+LLM
 │   │   │   └── Translate.jsx    # Dịch thuật AI
 │   │   ├── components/
 │   │   │   └── Layout.jsx       # Layout chung (header, nav, footer)
@@ -149,7 +151,9 @@ Truy cập:
 | GET | `/api/v1/health` | Health check |
 | POST | `/api/v1/test/generate` | Tạo đề thi TOEIC/IELTS (Part 5/6/7) |
 | POST | `/api/v1/test/submit` | Nộp bài & nhận feedback + giải thích |
+| POST | `/api/v1/chat` | Chatbot RAG+LLM — hỏi đáp ngữ pháp/từ vựng |
 | POST | `/api/v1/translate` | Dịch thuật AI (EN↔VI) + từ vựng + ngữ pháp |
+| GET | `/api/v1/rag/list` | Liệt kê chunks trong vectorstore |
 | POST | `/api/v1/rag/index` | Index knowledge base vào vectorstore |
 | POST | `/api/v1/rag/search` | Tìm kiếm trong knowledge base |
 
