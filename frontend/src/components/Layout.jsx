@@ -1,9 +1,10 @@
 import { Outlet, Link, useLocation } from "react-router-dom";
-import { Home, GraduationCap, Languages } from "lucide-react";
+import { Home, GraduationCap, Languages, MessageCircle } from "lucide-react";
 
 const navItems = [
   { path: "/", label: "Trang chủ", icon: Home },
   { path: "/exam", label: "Làm bài", icon: GraduationCap },
+  { path: "/chat", label: "Chatbot", icon: MessageCircle },
   { path: "/translate", label: "Dịch thuật", icon: Languages },
 ];
 
