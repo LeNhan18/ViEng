@@ -1,4 +1,5 @@
 import json
+import re
 from pathlib import Path
 from fastapi import APIRouter, HTTPException
 from app.models.schemas import (
@@ -7,6 +8,7 @@ from app.models.schemas import (
     ToeicReadingPart,
     SubmitRequest, SubmitResponse, Feedback,
     TranslateRequest, TranslateResponse,
+    ChatRequest, ChatResponse,
     ExamType, Skill,
 )
 from app.services.llm_service import llm_service
@@ -207,6 +209,31 @@ async def translate_text(request: TranslateRequest):
         )
     except Exception as e:
         logger.error(f"Error translating: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/chat", response_model=ChatResponse)
+async def chat(request: ChatRequest):
+    """Chatbot RAG + LLM: trả lời câu hỏi ngữ pháp/từ vựng TOEIC/IELTS dựa trên knowledge base."""
+    try:
+        rag_context = rag_service.retrieve_mmr(request.message, k=4, fetch_k=10)
+        sources = []
+        for m in re.finditer(r"\[Nguồn: ([^\]]+)\]", rag_context or ""):
+            p = m.group(1).strip()
+            name = Path(p).name if "/" in p or "\\" in p else p
+            if name and name not in sources:
+                sources.append(name)
+        sources = sources[:5]
+
+        history = [{"role": h.role, "content": h.content} for h in request.history]
+        reply = await llm_service.chat(
+            message=request.message,
+            history=history,
+            rag_context=rag_context,
+        )
+        return ChatResponse(message=reply, sources=sources)
+    except Exception as e:
+        logger.error(f"Error in chat: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 
