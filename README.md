@@ -27,9 +27,7 @@
 
 <p align="center">
   <strong>Demo ViEng2</strong><br />
-  <a href="https://www.youtube.com/watch?v=YOUR_VIDEO_ID">▶ Xem demo ViEng2 trên YouTube</a>
-  <br />
-  <em>File <code>Image/ViEng2.mp4</code> nặng nên không lưu trong repo — upload lên YouTube rồi sửa link trên dòng này trong README.</em>
+  <a href="https://www.youtube.com/watch?v=U4Ak4mDY-zk">▶ Xem demo ViEng2 (video dự án)</a>
 </p>
 
 ---
