@@ -48,3 +48,6 @@ logs/
 .pytest_cache/
 .coverage
 htmlcov/
+
+# Video demo nặng (không push GitHub — dùng YouTube / Git LFS / Drive)
+Image/ViEng2.mp4

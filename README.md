@@ -19,9 +19,17 @@
 </p>
 
 <p align="center">
+  <strong>Demo</strong><br />
   <video src="https://raw.githubusercontent.com/LeNhan18/ViEng/main/Image/ViEng.mp4" controls width="640"></video>
   <br />
   <em>Nếu video không phát, <a href="https://github.com/LeNhan18/ViEng/blob/main/Image/ViEng.mp4?raw=true">bấm vào đây để xem</a></em>
+</p>
+
+<p align="center">
+  <strong>Demo ViEng2</strong><br />
+  <a href="https://www.youtube.com/watch?v=YOUR_VIDEO_ID">▶ Xem demo ViEng2 trên YouTube</a>
+  <br />
+  <em>File <code>Image/ViEng2.mp4</code> nặng nên không lưu trong repo — upload lên YouTube rồi sửa link trên dòng này trong README.</em>
 </p>
 
 ---
