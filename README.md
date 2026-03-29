@@ -56,7 +56,7 @@
 | Thành phần | Mô tả |
 |------------|-------|
 | **RAG Pipeline** | ChromaDB + sentence-transformers (multilingual) — truy xuất ngữ pháp/từ vựng từ knowledge base khi tạo đề và giải thích |
-| **LLM** | Groq (Llama-3.3-70B) / OpenAI (GPT-4o-mini) / Fine-tuned Qwen2.5-7B |
+| **LLM** | Groq (Llama-3.3-70B) / OpenAI (GPT-4o-mini) / Fine-tuned [Qwen2.5-7B LoRA](https://huggingface.co/LeNhan18/ViEng-Qwen2.5-7B-lora) |
 | **Fine-tuning** | QLoRA + Unsloth trên Colab T4; dataset 500+ mẫu RAG-augmented |
 | **TTS** | Edge TTS (miễn phí) — phát âm tiếng Anh khi dịch Việt→Anh |
 
@@ -194,7 +194,8 @@ cd androidfrontend && flutter run
    | `GROQ_API_KEY` | [Groq Console](https://console.groq.com) — miễn phí |
    | `OPENAI_API_KEY` | [OpenAI](https://platform.openai.com) — trả phí |
 
-3. (Tùy chọn) Fine-tuned model:
+3. (Tùy chọn) Fine-tuned model — adapter đã public trên Hugging Face:
+   - **Model card:** https://huggingface.co/LeNhan18/ViEng-Qwen2.5-7B-lora
    ```env
    USE_FINETUNED_MODEL=true
    HF_MODEL_NAME=LeNhan18/ViEng-Qwen2.5-7B-lora
@@ -243,6 +244,8 @@ ViEng hỗ trợ fine-tune Qwen2.5-7B với **RAG-augmented data** trên Google 
 2. **Sinh dataset** — `python scripts/generate_finetune_dataset.py`
 3. **Upload** `data/finetune_dataset.jsonl` lên Colab
 4. **Chạy** `FineTune_ViEng.ipynb` (GPU T4)
+
+Adapter đã train: https://huggingface.co/LeNhan18/ViEng-Qwen2.5-7B-lora
 
 Chi tiết xem trong notebook.
 
