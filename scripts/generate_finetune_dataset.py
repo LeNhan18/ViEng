@@ -29,6 +29,7 @@ import os
 import sys
 import io
 from pathlib import Path
+from collections import defaultdict
 
 sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding="utf-8")
 
@@ -48,6 +49,16 @@ _groq_key_index = 0
 
 retriever = None
 KB_DIR = PROJECT_ROOT / "data" / "knowledge_base"
+
+# Mac dinh chi lay cac file user uu tien khi --from-kb
+DEFAULT_FOCUS_SOURCES = [
+    "17_toeic_reading_strategies.txt",
+    "11_reported_speech.txt",
+    "22_TOEIC_READING1.pdf",
+    "22_TOEIC_READING2.pdf",
+    "11_toeic_vocabulary.txt",
+    "14_phrasal_verbs_toeic.txt",
+]
 
 
 def load_kb_chunks() -> list[dict]:
@@ -103,6 +114,46 @@ def load_kb_chunks() -> list[dict]:
             print(f"  [!] Khong doc duoc {pdf_file.name}: {e}")
 
     return chunks_out
+
+
+def filter_chunks_by_sources(chunks: list[dict], sources: list[str]) -> list[dict]:
+    """Loc chunk theo danh sach source file."""
+    if not sources:
+        return chunks
+    allow = {s.strip() for s in sources if s and s.strip()}
+    return [c for c in chunks if c.get("source") in allow]
+
+
+def build_balanced_chunk_order(chunks: list[dict], source_priority: list[str] | None = None) -> list[dict]:
+    """
+    Tao thu tu chunk can bang theo source (round-robin).
+    Neu co source_priority thi uu tien thu tu do.
+    """
+    by_source: dict[str, list[dict]] = defaultdict(list)
+    for ch in chunks:
+        src = ch.get("source", "N/A")
+        by_source[src].append(ch)
+
+    if source_priority:
+        ordered_sources = [s for s in source_priority if s in by_source]
+        tail = sorted([s for s in by_source.keys() if s not in set(ordered_sources)])
+        ordered_sources.extend(tail)
+    else:
+        ordered_sources = sorted(by_source.keys())
+
+    balanced: list[dict] = []
+    idx = 0
+    while True:
+        added = False
+        for src in ordered_sources:
+            src_chunks = by_source[src]
+            if idx < len(src_chunks):
+                balanced.append(src_chunks[idx])
+                added = True
+        if not added:
+            break
+        idx += 1
+    return balanced
 
 
 def init_rag():
@@ -735,6 +786,17 @@ def main():
         default="qwen2.5:7b",
         help="Model Ollama (mac dinh qwen2.5:7b). Ban co gemma3:4b thi dung --ollama-model gemma3:4b",
     )
+    parser.add_argument(
+        "--all-sources",
+        action="store_true",
+        help="Khi --from-kb: lay tat ca file trong knowledge_base (bo qua danh sach focus mac dinh).",
+    )
+    parser.add_argument(
+        "--source-files",
+        type=str,
+        default="",
+        help="Khi --from-kb: danh sach file nguon, ngan cach boi dau phay. VD: a.txt,b.pdf",
+    )
     args = parser.parse_args()
 
     print("=" * 60)
@@ -761,14 +823,49 @@ def main():
         if not chunks:
             print("[!] Khong tim thay file .txt hoac .pdf trong data/knowledge_base")
             return
+
+        # Nguon chunk: uu tien source-files -> focus mac dinh -> all-sources
+        custom_sources = [s.strip() for s in args.source_files.split(",") if s.strip()]
+        if custom_sources:
+            selected_sources = custom_sources
+            print(f"  Loc theo --source-files ({len(selected_sources)} file)")
+        elif args.all_sources:
+            selected_sources = []
+            print("  Lay tat ca source (--all-sources)")
+        else:
+            selected_sources = DEFAULT_FOCUS_SOURCES
+            print(f"  Focus source mac dinh ({len(selected_sources)} file):")
+            for s in selected_sources:
+                print(f"    - {s}")
+
+        filtered = filter_chunks_by_sources(chunks, selected_sources)
+        if not filtered:
+            print("[!] Sau khi loc source, khong con chunk nao. Kiem tra ten file trong --source-files.")
+            return
+
+        # Sap xep can bang theo tung source de khong bi don vao file dau
+        balanced_chunks = build_balanced_chunk_order(
+            filtered,
+            source_priority=selected_sources if selected_sources else None,
+        )
+
         start = max(0, args.start)
-        end = min(start + args.max_chunks, len(chunks))
-        to_process = chunks[start:end]
-        print(f"  Tim thay {len(chunks)} chunk. Xu ly {len(to_process)} chunk (tu #{start+1} den #{end})")
+        end = min(start + args.max_chunks, len(balanced_chunks))
+        to_process = balanced_chunks[start:end]
+
+        # Thong ke nhanh so chunk theo source
+        src_count = defaultdict(int)
+        for ch in filtered:
+            src_count[ch.get("source", "N/A")] += 1
+        print(f"  Tim thay tong {len(chunks)} chunk; sau loc con {len(filtered)} chunk tu {len(src_count)} source.")
+        for src in sorted(src_count.keys()):
+            print(f"    {src}: {src_count[src]} chunk")
+
+        print(f"  Xu ly {len(to_process)} chunk can bang (tu vi tri #{start+1} den #{end} trong danh sach can bang)")
         print(f"  Tip: --max-chunks 50 --start {end} de tiep tuc lan sau")
         for i, chunk in enumerate(to_process, start + 1):
             src = chunk.get("source", "?")
-            print(f"  [{i}/{len(chunks)}] Chunk tu {src}...")
+            print(f"  [{i}/{len(balanced_chunks)}] Chunk tu {src}...")
             try:
                 samples = gen_from_chunk(chunk, n_questions=2, questions_only=args.questions_only)
                 all_samples.extend(samples)
