@@ -1,0 +1,74 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: vieng-backend
+  namespace: vieng
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: vieng-backend
+  template:
+    metadata:
+      labels:
+        app: vieng-backend
+    spec:
+      containers:
+        - name: backend
+          # Đổi tag theo image bạn push lên GHCR
+          image: ghcr.io/LeNhan18/ViEng-backend:main
+          imagePullPolicy: IfNotPresent
+          ports:
+            - containerPort: 8000
+          env:
+            - name: APP_ENV
+              value: "production"
+            - name: APP_HOST
+              value: "0.0.0.0"
+            - name: APP_PORT
+              value: "8000"
+            - name: LOG_LEVEL
+              value: "info"
+            # Inject secrets qua Secret (tự tạo)
+            - name: GROQ_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: vieng-secrets
+                  key: GROQ_API_KEY
+                  optional: true
+            - name: OPENAI_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: vieng-secrets
+                  key: OPENAI_API_KEY
+                  optional: true
+            - name: USE_FINETUNED_MODEL
+              valueFrom:
+                secretKeyRef:
+                  name: vieng-secrets
+                  key: USE_FINETUNED_MODEL
+                  optional: true
+            - name: HF_MODEL_NAME
+              valueFrom:
+                secretKeyRef:
+                  name: vieng-secrets
+                  key: HF_MODEL_NAME
+                  optional: true
+          readinessProbe:
+            httpGet:
+              path: /api/v1/health
+              port: 8000
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /api/v1/health
+              port: 8000
+            initialDelaySeconds: 15
+            periodSeconds: 20
+          volumeMounts:
+            - name: vectorstore
+              mountPath: /app/data/vectorstore
+      volumes:
+        - name: vectorstore
+          emptyDir: {}
