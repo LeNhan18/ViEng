@@ -180,6 +180,74 @@ cd androidfrontend && flutter run
 
 ---
 
+## Docker
+
+### Backend (FastAPI)
+
+Build & chạy:
+
+```bash
+docker build -t vieng-backend .
+docker run --rm -p 8000:8000 --env-file .env vieng-backend
+```
+
+### Frontend (React build + Nginx)
+
+Build & chạy:
+
+```bash
+docker build -t vieng-frontend ./frontend
+docker run --rm -p 3000:80 vieng-frontend
+```
+
+---
+
+## CI/CD (GitHub Actions)
+
+Repo đã có:
+
+- **CI**: `.github/workflows/ci.yml` (pytest + build React)
+- **Build & Push image**: `.github/workflows/docker.yml` (push lên **GHCR** khi push branch `main` hoặc `huggingfaceupload`)
+
+Images tạo ra dạng:
+
+- `ghcr.io/<owner>/<repo>-backend:<tag>`
+- `ghcr.io/<owner>/<repo>-frontend:<tag>`
+
+---
+
+## Kubernetes
+
+Manifests mẫu trong thư mục `k8s/` gồm:
+
+- `namespace.yaml`
+- `backend-deployment.yaml`, `backend-service.yaml`
+- `frontend-deployment.yaml`, `frontend-service.yaml`
+- `ingress.yaml` (route `/api` → backend, `/` → frontend)
+
+Apply:
+
+```bash
+kubectl apply -f k8s/namespace.yaml
+kubectl apply -f k8s/
+```
+
+### Secrets (API keys)
+
+Tạo secret (ví dụ):
+
+```bash
+kubectl -n vieng create secret generic vieng-secrets \
+  --from-literal=GROQ_API_KEY="..." \
+  --from-literal=OPENAI_API_KEY="..." \
+  --from-literal=USE_FINETUNED_MODEL="false" \
+  --from-literal=HF_MODEL_NAME=""
+```
+
+> Lưu ý: không commit secrets vào git. Chỉ inject qua Kubernetes Secret / GitHub Secrets.
+
+---
+
 ## Cấu hình
 
 1. Sao chép file môi trường:

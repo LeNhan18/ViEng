@@ -1,0 +1,28 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: vieng-frontend
+  namespace: vieng
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: vieng-frontend
+  template:
+    metadata:
+      labels:
+        app: vieng-frontend
+    spec:
+      containers:
+        - name: frontend
+          # Đổi tag theo image bạn push lên GHCR
+          image: ghcr.io/LeNhan18/ViEng-frontend:main
+          imagePullPolicy: IfNotPresent
+          ports:
+            - containerPort: 80
+          readinessProbe:
+            httpGet:
+              path: /
+              port: 80
+            initialDelaySeconds: 3
+            periodSeconds: 10
