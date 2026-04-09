@@ -3,11 +3,9 @@
 </p>
 
 <h1 align="center">ViEng</h1>
+
 <p align="center">
-  <strong>AI-Powered English Exam Preparation Platform</strong>
-</p>
-<p align="center">
-  Trợ lý luyện thi TOEIC/IELTS cho sinh viên Việt Nam
+  <strong>AI-powered TOEIC/IELTS exam preparation platform for Vietnamese learners</strong>
 </p>
 
 <p align="center">
@@ -15,6 +13,9 @@
   <img src="https://img.shields.io/badge/FastAPI-009688?style=flat-square&logo=fastapi&logoColor=white" alt="FastAPI" />
   <img src="https://img.shields.io/badge/React-61DAFB?style=flat-square&logo=react&logoColor=black" alt="React" />
   <img src="https://img.shields.io/badge/Flutter-02569B?style=flat-square&logo=flutter&logoColor=white" alt="Flutter" />
+  <img src="https://img.shields.io/badge/Docker-2496ED?style=flat-square&logo=docker&logoColor=white" alt="Docker" />
+  <img src="https://img.shields.io/badge/Kubernetes-326CE5?style=flat-square&logo=kubernetes&logoColor=white" alt="Kubernetes" />
+  <img src="https://img.shields.io/badge/GitHub%20Actions-2088FF?style=flat-square&logo=githubactions&logoColor=white" alt="GitHub Actions" />
   <img src="https://img.shields.io/badge/License-MIT-green?style=flat-square" alt="License" />
 </p>
 
@@ -22,110 +23,109 @@
   <strong>Demo</strong><br />
   <video src="https://raw.githubusercontent.com/LeNhan18/ViEng/main/Image/ViEng.mp4" controls width="640"></video>
   <br />
-  <em>Nếu video không phát, <a href="https://github.com/LeNhan18/ViEng/blob/main/Image/ViEng.mp4?raw=true">bấm vào đây để xem</a></em>
+  <em>If the video does not play, <a href="https://github.com/LeNhan18/ViEng/blob/main/Image/ViEng.mp4?raw=true">click here</a>.</em>
 </p>
 
 <p align="center">
-  <strong>Demo ViEng2</strong><br />
-  <a href="https://www.youtube.com/watch?v=U4Ak4mDY-zk">▶ Xem demo ViEng2 (video dự án)</a>
+  <strong>Demo (ViEng2)</strong><br />
+  <a href="https://www.youtube.com/watch?v=U4Ak4mDY-zk">▶ Watch ViEng2 demo (project video)</a>
 </p>
 
 ---
 
-## Mục lục
+## Table of Contents
 
-- [Giới thiệu](#giới-thiệu)
-- [Tính năng](#tính-năng)
+- [Overview](#overview)
+- [Key Features](#key-features)
+- [Architecture (High-level)](#architecture-high-level)
 - [Tech Stack](#tech-stack)
-- [Cài đặt](#cài-đặt)
-- [Cấu hình](#cấu-hình)
+- [Quickstart (Local)](#quickstart-local)
+- [Configuration](#configuration)
+- [LLM Providers](#llm-providers)
+- [Docker](#docker)
+- [CI/CD](#cicd)
+- [Kubernetes](#kubernetes)
 - [API Reference](#api-reference)
-- [Knowledge Base](#knowledge-base)
+- [Knowledge Base (RAG)](#knowledge-base-rag)
 - [Fine-tuning](#fine-tuning)
+- [Project Structure](#project-structure)
 - [Roadmap](#roadmap)
 - [License](#license)
 
 ---
 
-## Giới thiệu
+## Overview
 
-**ViEng** là nền tảng luyện thi tiếng Anh sử dụng AI, được thiết kế riêng cho sinh viên Việt Nam. Có **web** (React) và **mobile** (Flutter Android). Ứng dụng kết hợp **RAG (Retrieval-Augmented Generation)** với **Large Language Models** để tạo đề thi chuẩn TOEIC/IELTS, giải thích đáp án theo ngữ cảnh, dịch thuật thông minh và chatbot hỏi đáp — tất cả theo phong cách "thầy cô Việt" thân thiện, dễ hiểu.
+**ViEng** is an AI-assisted English exam preparation platform tailored for Vietnamese learners. It provides a **web app** (React) and an optional **mobile app** (Flutter/Android), powered by a **RAG (Retrieval-Augmented Generation)** pipeline and multiple LLM backends.
 
-### Điểm nổi bật kỹ thuật
+The platform focuses on:
 
-| Thành phần | Mô tả |
-|------------|-------|
-| **RAG Pipeline** | ChromaDB + sentence-transformers (multilingual) — truy xuất ngữ pháp/từ vựng từ knowledge base khi tạo đề và giải thích |
-| **LLM** | Groq (Llama-3.3-70B) / OpenAI (GPT-4o-mini) / Fine-tuned [Qwen2.5-7B LoRA](https://huggingface.co/LeNhan18/ViEng-Qwen2.5-7B-lora) |
-| **Fine-tuning** | QLoRA + Unsloth trên Colab T4; dataset 500+ mẫu RAG-augmented |
-| **TTS** | Edge TTS (miễn phí) — phát âm tiếng Anh khi dịch Việt→Anh |
+- Generating TOEIC/IELTS-style practice content
+- Explaining answers with Vietnamese-teacher style guidance
+- Chat-based Q&A grounded in a curated knowledge base
+- AI translation with vocabulary + grammar notes and optional TTS pronunciation
 
 ---
 
-## Tính năng
+## Key Features
 
-### Làm bài thi TOEIC Reading
+- **TOEIC Reading practice**:
+  - Part 5 — Incomplete Sentences
+  - Part 6 — Text Completion
+  - Part 7 — Single & Multiple Passages
+- **Answer explanations** tailored by part (sentence-level vs passage-level reasoning)
+- **Chatbot with RAG** (grounded responses + source hints)
+- **AI translation** (EN↔VI) with:
+  - key vocabulary extraction
+  - grammar notes
+  - optional **TTS pronunciation** (Edge TTS) for VI→EN output
+- **Knowledge base ingestion** from `.txt` and `.pdf`
 
-- **Part 5** — Incomplete Sentences (hoàn thành câu)
-- **Part 6** — Text Completion (hoàn thành đoạn văn)
-- **Part 7** — Single & Multiple Passages (đọc hiểu)
+---
 
-Đề thi được sinh đúng format chuẩn TOEIC, có RAG context từ knowledge base.
+## Architecture (High-level)
 
-### Giải thích theo từng Part
+At runtime, the system looks like:
 
-- **Part 5**: Tập trung ngữ pháp, từ vựng trong câu đơn
-- **Part 6 & 7**: Hướng về đoạn văn — trích dẫn ngữ cảnh, mạch văn, chứng minh đáp án
-
-### Chatbot RAG + LLM
-
-Hỏi đáp ngữ pháp, từ vựng TOEIC/IELTS — AI trả lời dựa trên knowledge base, có nguồn tham khảo.
-
-### Dịch thuật AI
-
-- Dịch Anh↔Việt thông minh
-- Kèm từ vựng quan trọng và ghi chú ngữ pháp
-- **Phát âm TTS**: Nút "Đọc phát âm" khi dịch Việt→Anh (Edge TTS)
-
-### Knowledge Base
-
-- Hỗ trợ **.txt** và **.pdf**
-- Index vào ChromaDB để RAG sử dụng khi tạo đề, giải thích, chatbot
+- **Frontend (React/Vite)** calls the **FastAPI backend**
+- Backend optionally performs **RAG retrieval** (ChromaDB vector store)
+- Backend calls an LLM provider (Groq / OpenAI / Fine-tuned model via Hugging Face)
 
 ---
 
 ## Tech Stack
 
-| Layer | Công nghệ |
-|-------|-----------|
-| **Backend** | Python 3.11, FastAPI |
-| **Web** | React 19, Vite 6, TailwindCSS 4 |
-| **Mobile** | Flutter (Android) |
-| **LLM** | Groq / OpenAI / HuggingFace (fine-tuned) |
+| Layer | Technology |
+|------|------------|
+| **Backend** | Python 3.11+, FastAPI |
+| **Web** | React, Vite, TailwindCSS |
+| **Mobile (optional)** | Flutter (Android) |
+| **LLM** | Groq / OpenAI / Hugging Face (fine-tuned) |
 | **RAG** | LangChain, ChromaDB |
-| **Embeddings** | sentence-transformers (paraphrase-multilingual-MiniLM) |
+| **Embeddings** | sentence-transformers (multilingual) |
 | **TTS** | edge-tts |
-| **Fine-tune** | Unsloth, QLoRA |
+| **Fine-tuning** | QLoRA, Unsloth (Colab) |
+| **Packaging/Deploy** | Docker, Kubernetes (`k8s/`), GitHub Actions (CI + GHCR) |
 
 ---
 
-## Cài đặt
+## Quickstart (Local)
 
-### Yêu cầu
+### Prerequisites
 
-- Python 3.11+
-- Node.js 18+ (cho web)
-- Flutter SDK (cho mobile)
-- API key: Groq hoặc OpenAI
+- Python **3.11+**
+- Node.js **18+** (for web)
+- (Optional) Flutter SDK (for Android)
+- LLM API key: Groq or OpenAI (unless you use the fine-tuned HF option)
 
-### Bước 1: Clone repository
+### Clone
 
 ```bash
 git clone https://github.com/LeNhan18/ViEng.git
 cd ViEng
 ```
 
-### Bước 2: Backend
+### Backend
 
 ```bash
 python -m venv venv
@@ -137,46 +137,83 @@ venv\Scripts\activate
 source venv/bin/activate
 
 pip install -r requirements.txt
+uvicorn app.main:app --reload
 ```
 
-### Bước 3: Web (React)
+API docs: `http://localhost:8000/docs`
+
+### Web (React)
 
 ```bash
 cd frontend
 npm install --legacy-peer-deps
-cd ..
+npm run dev
 ```
 
-### Bước 4: Mobile (Flutter)
+Web app: `http://localhost:3000`
+
+> The Vite dev server proxies `/api` to `http://localhost:8000`.
+
+### Mobile (optional)
 
 ```bash
 cd androidfrontend
 flutter pub get
-cd ..
+flutter run
 ```
 
-### Bước 5: Chạy ứng dụng
+---
 
-**Web:**
+## Configuration
+
+The backend reads environment variables from `.env`.
+
+If you have an example file, copy it first:
+
 ```bash
-# Terminal 1 — Backend
-uvicorn app.main:app --reload
-
-# Terminal 2 — Web
-cd frontend && npm run dev
+cp .env.example .env
 ```
 
-**Mobile:**
-```bash
-# Backend phải chạy trước
-cd androidfrontend && flutter run
+Common variables:
+
+| Variable | Description |
+|---------|-------------|
+| `GROQ_API_KEY` | Groq API key |
+| `OPENAI_API_KEY` | OpenAI API key |
+| `LOG_LEVEL` | Logging level (e.g. `info`, `debug`) |
+
+---
+
+## LLM Providers
+
+ViEng supports multiple LLM backends:
+
+- **Groq** (fast hosted inference)
+- **OpenAI**
+- **Fine-tuned model on Hugging Face** (recommended for “fine-tune mode” in deployments)
+
+Fine-tuned model link:
+- [LeNhan18/ViEng-Qwen2.5-7B-lora](https://huggingface.co/LeNhan18/ViEng-Qwen2.5-7B-lora)
+
+Enable fine-tuned mode:
+
+```env
+USE_FINETUNED_MODEL=true
+HF_MODEL_NAME=LeNhan18/ViEng-Qwen2.5-7B-lora
+
+# Choose how to use the fine-tuned model:
+# - hf_inference: Hugging Face Inference API (lightweight, deploy-friendly)
+# - hf_local: load locally with transformers/torch (heavy; requires GPU/extra deps)
+LLM_PROVIDER=hf_inference
+
+# Optional token (public models may work without it depending on rate limits)
+HF_TOKEN=
 ```
 
-| URL / Platform | Mô tả |
-|----------------|-------|
-| http://localhost:5173 | Ứng dụng web |
-| http://localhost:8000/docs | API Swagger |
-| Android | Flutter app (androidfrontend) |
+Per-request provider override:
+
+- Frontend can send `llm_provider` for `/test/generate`, `/chat`, and `/translate`
+- Supported values: `groq`, `openai`, `hf_inference`, `hf_local`, `auto`
 
 ---
 
@@ -184,16 +221,12 @@ cd androidfrontend && flutter run
 
 ### Backend (FastAPI)
 
-Build & chạy:
-
 ```bash
 docker build -t vieng-backend .
 docker run --rm -p 8000:8000 --env-file .env vieng-backend
 ```
 
-### Frontend (React build + Nginx)
-
-Build & chạy:
+### Frontend (Vite build + Nginx)
 
 ```bash
 docker build -t vieng-frontend ./frontend
@@ -202,28 +235,33 @@ docker run --rm -p 3000:80 vieng-frontend
 
 ---
 
-## CI/CD (GitHub Actions)
+## CI/CD
 
-Repo đã có:
+This repository includes GitHub Actions workflows:
 
-- **CI**: `.github/workflows/ci.yml` (pytest + build React)
-- **Build & Push image**: `.github/workflows/docker.yml` (push lên **GHCR** khi push branch `main` hoặc `huggingfaceupload`)
+- **CI**: `.github/workflows/ci.yml`
+  - Backend: installs deps and runs `pytest`
+  - Frontend: installs deps and runs `npm run build`
+- **Docker build & push (GHCR)**: `.github/workflows/docker.yml`
+  - Builds and pushes backend/frontend images to `ghcr.io`
 
-Images tạo ra dạng:
+Image naming:
 
 - `ghcr.io/<owner>/<repo>-backend:<tag>`
 - `ghcr.io/<owner>/<repo>-frontend:<tag>`
+
+> Note: the workflow pushes images, but does not automatically deploy to a Kubernetes cluster (no `kubectl apply` step yet).
 
 ---
 
 ## Kubernetes
 
-Manifests mẫu trong thư mục `k8s/` gồm:
+Sample manifests live in `k8s/`:
 
 - `namespace.yaml`
 - `backend-deployment.yaml`, `backend-service.yaml`
 - `frontend-deployment.yaml`, `frontend-service.yaml`
-- `ingress.yaml` (route `/api` → backend, `/` → frontend)
+- `ingress.yaml` (routes `/api` → backend, `/` → frontend)
 
 Apply:
 
@@ -234,69 +272,50 @@ kubectl apply -f k8s/
 
 ### Secrets (API keys)
 
-Tạo secret (ví dụ):
+Create a secret in the `vieng` namespace:
 
 ```bash
 kubectl -n vieng create secret generic vieng-secrets \
   --from-literal=GROQ_API_KEY="..." \
   --from-literal=OPENAI_API_KEY="..." \
   --from-literal=USE_FINETUNED_MODEL="false" \
-  --from-literal=HF_MODEL_NAME=""
+  --from-literal=HF_MODEL_NAME="" \
+  --from-literal=LLM_PROVIDER="hf_inference" \
+  --from-literal=HF_TOKEN=""
 ```
 
-> Lưu ý: không commit secrets vào git. Chỉ inject qua Kubernetes Secret / GitHub Secrets.
-
----
-
-## Cấu hình
-
-1. Sao chép file môi trường:
-   ```bash
-   cp .env.example .env
-   ```
-
-2. Cấu hình API key trong `.env`:
-
-   | Biến | Mô tả |
-   |------|-------|
-   | `GROQ_API_KEY` | [Groq Console](https://console.groq.com) — miễn phí |
-   | `OPENAI_API_KEY` | [OpenAI](https://platform.openai.com) — trả phí |
-
-3. (Tùy chọn) Fine-tuned model — adapter đã public trên Hugging Face:
-   - **Model card:** https://huggingface.co/LeNhan18/ViEng-Qwen2.5-7B-lora
-   ```env
-   USE_FINETUNED_MODEL=true
-   HF_MODEL_NAME=LeNhan18/ViEng-Qwen2.5-7B-lora
-   ```
+Security note: **Never commit secrets to git.** Use GitHub Secrets / Kubernetes Secrets.
 
 ---
 
 ## API Reference
 
-| Method | Endpoint | Mô tả |
-|--------|----------|-------|
-| `GET` | `/api/v1/health` | Health check |
-| `POST` | `/api/v1/test/generate` | Tạo đề thi TOEIC (Part 5/6/7) |
-| `POST` | `/api/v1/test/submit` | Nộp bài, nhận feedback + giải thích |
-| `POST` | `/api/v1/chat` | Chatbot RAG — hỏi đáp ngữ pháp/từ vựng |
-| `POST` | `/api/v1/translate` | Dịch thuật AI (EN↔VI) + từ vựng + ngữ pháp |
-| `POST` | `/api/v1/tts` | Text-to-Speech — phát âm tiếng Anh |
-| `GET` | `/api/v1/rag/list` | Liệt kê chunks trong vectorstore |
-| `POST` | `/api/v1/rag/index` | Index knowledge base |
-| `POST` | `/api/v1/rag/search` | Tìm kiếm trong knowledge base |
+Base prefix: `/api/v1`
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| `GET` | `/health` | Health check |
+| `POST` | `/test/generate` | Generate TOEIC/IELTS questions (TOEIC Reading supports Part 5/6/7 formats) |
+| `POST` | `/test/submit` | Submit answers and get feedback + explanations |
+| `POST` | `/chat` | RAG-grounded chat |
+| `POST` | `/translate` | EN↔VI translation + vocabulary + grammar notes |
+| `POST` | `/tts` | Text-to-speech (English) |
+| `POST` | `/rag/index` | (Re)index knowledge base into Chroma |
+| `GET` | `/rag/list` | List stored chunks (debug/inspection) |
+| `POST` | `/rag/search` | Search knowledge base |
 
 ---
 
-## Knowledge Base
+## Knowledge Base (RAG)
 
-Đặt tài liệu vào `data/knowledge_base/`:
+Place documents into `data/knowledge_base/`:
 
-| Định dạng | Ghi chú |
-|-----------|---------|
-| `.txt` | Grammar, từ vựng, strategies — encoding UTF-8 |
-| `.pdf` | Sách, đề thi TOEIC/IELTS (pypdf) |
+| Format | Notes |
+|--------|------|
+| `.txt` | Grammar, vocabulary, strategies — UTF-8 |
+| `.pdf` | TOEIC/IELTS materials (parsed by `pypdf`) |
 
-Index vào vectorstore:
+Index:
 
 ```bash
 curl -X POST http://localhost:8000/api/v1/rag/index
@@ -306,24 +325,23 @@ curl -X POST http://localhost:8000/api/v1/rag/index
 
 ## Fine-tuning
 
-ViEng hỗ trợ fine-tune Qwen2.5-7B với **RAG-augmented data** trên Google Colab:
+ViEng includes a fine-tuning workflow for **Qwen2.5-7B** using **RAG-augmented** training data (Colab/T4):
 
-1. **Index knowledge base** — đảm bảo `data/knowledge_base/` có file .txt hoặc .pdf
-2. **Sinh dataset** — `python scripts/generate_finetune_dataset.py`
-3. **Upload** `data/finetune_dataset.jsonl` lên Colab
-4. **Chạy** `FineTune_ViEng.ipynb` (GPU T4)
+1. Ensure `data/knowledge_base/` contains `.txt` / `.pdf` documents
+2. Generate dataset: `python scripts/generate_finetune_dataset.py`
+3. Upload `data/finetune_dataset.jsonl` to Colab
+4. Run `FineTune_ViEng.ipynb`
 
-Adapter đã train: https://huggingface.co/LeNhan18/ViEng-Qwen2.5-7B-lora
-
-Chi tiết xem trong notebook.
+Trained adapter:
+- [LeNhan18/ViEng-Qwen2.5-7B-lora](https://huggingface.co/LeNhan18/ViEng-Qwen2.5-7B-lora)
 
 ---
 
-## Cấu trúc dự án
+## Project Structure
 
 ```
 ViEng/
-├── app/                # Backend FastAPI
+├── app/                  # FastAPI backend
 │   ├── main.py
 │   ├── api/routes.py
 │   ├── core/config.py
@@ -331,14 +349,15 @@ ViEng/
 │   └── services/
 │       ├── llm_service.py
 │       └── rag_service.py
-├── frontend/           # Web React
+├── frontend/             # React web app
 │   └── src/
-│       ├── pages/     # Home, Exam, Result, Chat, Translate
+│       ├── pages/        # Home, Exam, Result, Chat, Translate
 │       └── components/
-├── androidfrontend/    # Mobile Flutter (Android)
+├── androidfrontend/      # Flutter Android app (optional)
 ├── data/
-│   ├── knowledge_base/ # .txt, .pdf
-│   └── vectorstore/    # ChromaDB
+│   ├── knowledge_base/   # .txt, .pdf
+│   └── vectorstore/      # ChromaDB persistence
+├── k8s/                  # Kubernetes manifests (optional deployment)
 ├── scripts/
 └── tests/
 ```
@@ -347,25 +366,12 @@ ViEng/
 
 ## Roadmap
 
-| Trạng thái | Tính năng |
-|------------|-----------|
-| Done | TOEIC Reading Part 5/6/7 |
-| Done | RAG pipeline + Knowledge base (.txt, .pdf) |
-| Done | Chatbot RAG + LLM |
-| Done | Dịch thuật + TTS phát âm |
-| Done | Fine-tune Qwen2.5-7B (RAG-augmented) |
-| Planned | TOEIC Listening (Part 1–4) |
-| Planned | IELTS Reading/Writing |
-| Planned | Lưu session & tiến độ học tập |
-
----
-
-## Đối tượng
-
-Sinh viên đại học, người đi làm cần chứng chỉ TOEIC/IELTS tại Việt Nam.
+- TOEIC Listening (Part 1–4)
+- IELTS Reading/Writing enhancements
+- Learning progress tracking and sessions
 
 ---
 
 ## License
 
-MIT License — xem [LICENSE](LICENSE) để biết chi tiết.
+MIT License — see [LICENSE](LICENSE).
