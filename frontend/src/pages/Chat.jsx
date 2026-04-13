@@ -1,12 +1,14 @@
 import { useState, useRef, useEffect } from "react";
 import { chat } from "../api";
 import { Send, Loader2, MessageCircle, BookOpen } from "lucide-react";
+import LlmProviderSelect from "../components/LlmProviderSelect";
 
 export default function Chat() {
   const [messages, setMessages] = useState([]);
   const [input, setInput] = useState("");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
+  const [llmProvider, setLlmProvider] = useState(localStorage.getItem("vieng_llm_provider") || "groq");
   const bottomRef = useRef(null);
 
   useEffect(() => {
@@ -24,8 +26,9 @@ export default function Chat() {
     setLoading(true);
 
     try {
+      localStorage.setItem("vieng_llm_provider", llmProvider);
       const history = messages.map((m) => ({ role: m.role, content: m.content }));
-      const data = await chat({ message: text, history });
+      const data = await chat({ message: text, history, llmProvider });
       setMessages((prev) => [
         ...prev,
         { role: "assistant", content: data.message, sources: data.sources || [] },
@@ -45,6 +48,9 @@ export default function Chat() {
         <p className="mt-2 text-slate-500">
           Hỏi đáp ngữ pháp, từ vựng TOEIC/IELTS — AI trả lời dựa trên knowledge base
         </p>
+        <div className="mt-4 flex justify-center">
+          <LlmProviderSelect value={llmProvider} onChange={setLlmProvider} />
+        </div>
       </div>
 
       <div className="rounded-2xl border border-slate-200 bg-white shadow-sm">
