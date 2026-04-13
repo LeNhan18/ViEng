@@ -1,8 +1,12 @@
-from pydantic_settings import BaseSettings
 from functools import lru_cache
+
+from pydantic import field_validator
+from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
 class Settings(BaseSettings):
+    model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", extra="ignore")
+
     app_env: str = "development"
     app_host: str = "0.0.0.0"
     app_port: int = 8000
@@ -11,13 +15,38 @@ class Settings(BaseSettings):
     openai_api_key: str = ""
     groq_api_key: str = ""
 
+    # LLM provider:
+    # - "auto": ưu tiên Groq -> OpenAI; nếu USE_FINETUNED_MODEL=true thì dùng HF (local hoặc inference)
+    # - "groq" | "openai" | "hf_inference" | "hf_local"
+    llm_provider: str = "auto"
+
     chroma_persist_dir: str = "./data/vectorstore"
     embedding_model: str = "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2"
 
     hf_model_name: str = ""
     use_finetuned_model: bool = False
+    hf_token: str = ""
 
-    model_config = {"env_file": ".env", "env_file_encoding": "utf-8"}
+    # CORS: "*" or comma-separated origins, e.g. http://localhost:5173,http://127.0.0.1:3000
+    cors_origins: str = "*"
+
+    # If non-empty, clients must send header X-API-Key matching this value.
+    api_key: str = ""
+
+    # MySQL async (aiomysql). Enable only when you need persistence.
+    use_database: bool = False
+    db_host: str = "127.0.0.1"
+    db_port: int = 3306
+    db_user: str = "root"
+    db_password: str = ""
+    db_name: str = "vieng"
+
+    @field_validator("cors_origins", mode="before")
+    @classmethod
+    def strip_cors(cls, v: object) -> object:
+        if isinstance(v, str):
+            return v.strip()
+        return v
 
 
 @lru_cache
