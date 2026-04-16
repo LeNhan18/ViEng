@@ -23,11 +23,21 @@ class LLMService:
         self._hf_tokenizer = None
 
         if settings.use_finetuned_model and settings.hf_model_name:
-            logger.info(f"Sẽ dùng fine-tuned model: {settings.hf_model_name}")
+            logger.info(
+                f"Sẽ dùng fine-tuned model: {settings.hf_model_name} (provider={settings.llm_provider})"
+            )
         if settings.openai_api_key:
             self._openai_client = AsyncOpenAI(api_key=settings.openai_api_key)
         if settings.groq_api_key:
             self._groq_client = AsyncGroq(api_key=settings.groq_api_key)
+
+    def _provider(self, override: str | None = None) -> str:
+        settings = get_settings()
+        p = (override or settings.llm_provider or "auto").strip().lower()
+        if p not in ("auto", "groq", "openai", "hf_inference", "hf_local"):
+            logger.warning(f"LLM provider không hợp lệ: {override or settings.llm_provider} -> dùng auto")
+            return "auto"
+        return p
 
     def _load_hf_model(self):
         """Lazy-load fine-tuned model từ HuggingFace (chỉ gọi khi cần)."""
@@ -81,6 +91,46 @@ class LLMService:
 
         return self._hf_tokenizer.decode(outputs[0][inputs.shape[-1]:], skip_special_tokens=True)
 
+    async def _generate_with_hf_inference(
+        self, prompt: str, max_tokens: int = 1000, system_msg: str = ""
+    ) -> str:
+        """
+        Generate text bằng Hugging Face Inference API (không load model local).
+        Phù hợp khi model đã public trên HF: https://huggingface.co/LeNhan18/ViEng-Qwen2.5-7B-lora
+        """
+        settings = get_settings()
+        if not settings.hf_model_name:
+            raise RuntimeError("Thiếu HF_MODEL_NAME")
+
+        try:
+            from huggingface_hub import InferenceClient
+        except Exception as e:
+            raise RuntimeError(
+                "Chưa cài huggingface-hub. Hãy pip install -r requirements.txt"
+            ) from e
+
+        client = InferenceClient(model=settings.hf_model_name, token=(settings.hf_token or None))
+
+        # Gộp system + user thành 1 prompt thuần để gọi text-generation.
+        # (Giữ tương thích với pipeline prompt hiện tại.)
+        full_prompt = prompt
+        if system_msg:
+            full_prompt = f"{system_msg}\n\n{prompt}"
+
+        # Inference API là sync, chạy trong thread để không block event loop.
+        import asyncio
+
+        def _run():
+            return client.text_generation(
+                full_prompt,
+                max_new_tokens=max_tokens,
+                temperature=0.7,
+                do_sample=True,
+                return_full_text=False,
+            )
+
+        return await asyncio.to_thread(_run)
+
     @property
     def _client_and_model(self) -> tuple:
         if self._groq_client:
@@ -95,6 +145,15 @@ class LLMService:
     def _use_finetuned(self) -> bool:
         settings = get_settings()
         return settings.use_finetuned_model and settings.hf_model_name
+
+    async def _call_finetuned(
+        self, prompt: str, max_tokens: int, system_msg: str, *, provider_override: str | None = None
+    ) -> str:
+        p = self._provider(provider_override)
+        if p in ("hf_inference",):
+            return await self._generate_with_hf_inference(prompt, max_tokens=max_tokens, system_msg=system_msg)
+        # "auto" hoặc "hf_local" -> ưu tiên local (giữ kỹ thuật cũ)
+        return await self._generate_with_hf(prompt, max_tokens=max_tokens, system_msg=system_msg)
 
     def _build_rag_context_section(self, rag_context: str) -> str:
         """Tạo đoạn RAG context để chèn vào prompt."""
@@ -124,7 +183,7 @@ class LLMService:
             "- 4 đáp án A, B, C, D\n"
             "- Kiểm tra ngữ pháp (thì, dạng từ, giới từ, mệnh đề quan hệ...) hoặc từ vựng\n"
             "- Chủ đề: công việc, email, hợp đồng, kinh doanh\n"
-        )
+        )   
         base += self._build_rag_context_section(rag_context)
         base += (
             "\nTrả về JSON array:\n"
@@ -196,12 +255,27 @@ class LLMService:
         )
         return base
 
-    async def _call_llm(self, prompt: str, max_tokens: int = 2000, system_msg: str = "") -> str:
+    async def _call_llm(
+        self,
+        prompt: str,
+        max_tokens: int = 2000,
+        system_msg: str = "",
+        *,
+        provider_override: str | None = None,
+    ) -> str:
         sys_content = system_msg or SYSTEM_PROMPT
         if self._use_finetuned:
-            return await self._generate_with_hf(prompt, max_tokens=max_tokens, system_msg=sys_content)
+            return await self._call_finetuned(
+                prompt, max_tokens=max_tokens, system_msg=sys_content, provider_override=provider_override
+            )
 
-        client, model = self._client_and_model
+        provider = self._provider(provider_override)
+        if provider == "groq" and self._groq_client:
+            client, model = self._groq_client, "llama-3.3-70b-versatile"
+        elif provider == "openai" and self._openai_client:
+            client, model = self._openai_client, "gpt-4o-mini"
+        else:
+            client, model = self._client_and_model
         response = await client.chat.completions.create(
             model=model,
             messages=[
@@ -220,6 +294,8 @@ class LLMService:
         level: Level,
         num_questions: int,
         part: ToeicReadingPart | None = None,
+        *,
+        llm_provider: str | None = None,
     ) -> str:
         logger.info(f"Generating questions: {exam_type}/{skill}/{level} part={part} n={num_questions}")
 
@@ -230,22 +306,22 @@ class LLMService:
 
             if part == ToeicReadingPart.PART5:
                 prompt = self._build_part5_prompt(level, num_questions, rag_context)
-                return await self._call_llm(prompt, max_tokens=2000)
+                return await self._call_llm(prompt, max_tokens=2000, provider_override=llm_provider)
 
             elif part == ToeicReadingPart.PART6:
                 num_passages = max(1, num_questions // 4)
                 prompt = self._build_part6_prompt(level, num_passages, rag_context)
-                return await self._call_llm(prompt, max_tokens=3000)
+                return await self._call_llm(prompt, max_tokens=3000, provider_override=llm_provider)
 
             elif part == ToeicReadingPart.PART7_SINGLE:
                 num_passages = max(1, num_questions // 3)
                 prompt = self._build_part7_single_prompt(level, num_passages, rag_context)
-                return await self._call_llm(prompt, max_tokens=4000)
+                return await self._call_llm(prompt, max_tokens=4000, provider_override=llm_provider)
 
             elif part == ToeicReadingPart.PART7_MULTIPLE:
                 num_sets = max(1, num_questions // 5)
                 prompt = self._build_part7_multiple_prompt(level, num_sets, rag_context)
-                return await self._call_llm(prompt, max_tokens=4000)
+                return await self._call_llm(prompt, max_tokens=4000, provider_override=llm_provider)
 
         rag_context = rag_service.retrieve_mmr(
             f"TOEIC IELTS grammar vocabulary {skill.value} {level.value}", k=2,
@@ -264,7 +340,7 @@ class LLMService:
             f'  [{{"id": 1, "content": "...", "options": ["A. ...", "B. ...", "C. ...", "D. ..."], "correct_answer": "A"}}]\n'
             f"- Chỉ trả về JSON, không thêm text khác."
         )
-        return await self._call_llm(prompt)
+        return await self._call_llm(prompt, provider_override=llm_provider)
 
     def _part_explanation_guidance(self, part: str | None) -> str:
         """Hướng dẫn giải thích khác nhau theo Part 5/6/7."""
@@ -299,6 +375,7 @@ class LLMService:
         *,
         part: str | None = None,
         passage: str = "",
+        llm_provider: str | None = None,
     ) -> str:
         prompt = (
             f"Bạn là thầy giáo tiếng Anh Việt Nam, giải thích thân thiện, gần gũi.\n\n"
@@ -327,7 +404,9 @@ class LLMService:
             "Bạn là thầy giáo tiếng Anh Việt Nam, giải thích dễ hiểu, thân thiện. "
             "Khi được cung cấp tài liệu tham khảo, hãy dựa vào đó để giải thích chính xác hơn."
         )
-        return await self._call_llm(prompt, max_tokens=1000, system_msg=explain_system)
+        return await self._call_llm(
+            prompt, max_tokens=1000, system_msg=explain_system, provider_override=llm_provider
+        )
 
 
     async def translate(
@@ -336,6 +415,8 @@ class LLMService:
         direction: str,
         level: str,
         rag_context: str = "",
+        *,
+        llm_provider: str | None = None,
     ) -> dict:
         """Dịch thuật EN<->VI với giải thích ngữ pháp và từ vựng."""
         if direction == "en_to_vi":
@@ -371,7 +452,7 @@ class LLMService:
             "- Chỉ trả về JSON, không thêm text."
         )
 
-        raw = await self._call_llm(prompt, max_tokens=2000)
+        raw = await self._call_llm(prompt, max_tokens=2000, provider_override=llm_provider)
 
         try:
             cleaned = raw.strip()
@@ -386,7 +467,14 @@ class LLMService:
                 "grammar_notes": [],
             }
 
-    async def chat(self, message: str, history: list[dict], rag_context: str = "") -> str:
+    async def chat(
+        self,
+        message: str,
+        history: list[dict],
+        rag_context: str = "",
+        *,
+        llm_provider: str | None = None,
+    ) -> str:
         """Chat với RAG context. Dùng knowledge base để trả lời câu hỏi ngữ pháp/từ vựng TOEIC/IELTS."""
         system_content = (
             "Bạn là trợ lý AI luyện thi TOEIC/IELTS tại Việt Nam. "
@@ -407,9 +495,17 @@ class LLMService:
                 f"{'User' if m['role']=='user' else 'Assistant'}: {m['content']}"
                 for m in messages[1:]
             )
-            return await self._generate_with_hf(prompt, max_tokens=1500, system_msg=system_content)
+            return await self._call_finetuned(
+                prompt, max_tokens=1500, system_msg=system_content, provider_override=llm_provider
+            )
 
-        client, model = self._client_and_model
+        provider = self._provider(llm_provider)
+        if provider == "groq" and self._groq_client:
+            client, model = self._groq_client, "llama-3.3-70b-versatile"
+        elif provider == "openai" and self._openai_client:
+            client, model = self._openai_client, "gpt-4o-mini"
+        else:
+            client, model = self._client_and_model
         response = await client.chat.completions.create(
             model=model,
             messages=messages,

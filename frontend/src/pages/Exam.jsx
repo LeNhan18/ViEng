@@ -2,6 +2,7 @@ import { useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { generateTest } from "../api";
 import { Loader2, ChevronRight, ChevronLeft, CheckCircle2, BookOpen } from "lucide-react";
+import LlmProviderSelect from "../components/LlmProviderSelect";
 
 const EXAM_TYPES = [
   { value: "toeic", label: "TOEIC", color: "border-blue-500 bg-blue-50 text-blue-700" },
@@ -58,6 +59,7 @@ export default function Exam() {
     level: "intermediate",
     part: "part5",
     numQuestions: 10,
+    llmProvider: localStorage.getItem("vieng_llm_provider") || "groq",
   });
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
@@ -80,6 +82,7 @@ export default function Exam() {
     setLoading(true);
     setError("");
     try {
+      localStorage.setItem("vieng_llm_provider", config.llmProvider);
       const data = await generateTest(config);
       setTestData(data);
       setAnswers({});
@@ -122,6 +125,14 @@ export default function Exam() {
         </div>
 
         <div className="space-y-6 rounded-2xl border border-slate-200 bg-white p-6 shadow-sm">
+          <div className="flex items-center justify-between gap-3">
+            <label className="block text-sm font-semibold text-slate-700">Chọn model</label>
+            <LlmProviderSelect
+              value={config.llmProvider}
+              onChange={(v) => setConfig((c) => ({ ...c, llmProvider: v }))}
+            />
+          </div>
+
           <div>
             <label className="mb-3 block text-sm font-semibold text-slate-700">Kỳ thi</label>
             <div className="flex gap-3">

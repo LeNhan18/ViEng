@@ -1,6 +1,7 @@
 import { useState, useRef } from "react";
 import { translateText, getTtsAudioUrl } from "../api";
 import { ArrowRightLeft, Loader2, BookOpen, Lightbulb, Copy, Check, Volume2 } from "lucide-react";
+import LlmProviderSelect from "../components/LlmProviderSelect";
 
 const DIRECTIONS = [
   { value: "en_to_vi", from: "English", to: "Tiếng Việt", flag: "🇬🇧 → 🇻🇳" },
@@ -23,6 +24,7 @@ export default function Translate() {
   const [error, setError] = useState("");
   const [copied, setCopied] = useState(false);
   const [ttsLoading, setTtsLoading] = useState(false);
+  const [llmProvider, setLlmProvider] = useState(localStorage.getItem("vieng_llm_provider") || "groq");
   const audioRef = useRef(null);
 
   const dirInfo = DIRECTIONS.find((d) => d.value === direction);
@@ -41,7 +43,8 @@ export default function Translate() {
     setError("");
     setResult(null);
     try {
-      const data = await translateText({ text, direction, level, useRag });
+      localStorage.setItem("vieng_llm_provider", llmProvider);
+      const data = await translateText({ text, direction, level, useRag, llmProvider });
       setResult(data);
     } catch (err) {
       setError(err.response?.data?.detail || "Không thể dịch. Vui lòng thử lại.");
@@ -85,6 +88,11 @@ export default function Translate() {
       </div>
 
       <div className="rounded-2xl border border-slate-200 bg-white shadow-sm">
+        <div className="flex flex-wrap items-center justify-between gap-3 border-b border-slate-100 px-6 py-4">
+          <div className="text-sm font-semibold text-slate-700">Chọn model</div>
+          <LlmProviderSelect value={llmProvider} onChange={setLlmProvider} />
+        </div>
+
         {/* Direction bar */}
         <div className="flex items-center justify-center gap-4 border-b border-slate-100 px-6 py-4">
           <span className="text-sm font-semibold text-slate-700">{dirInfo.from}</span>

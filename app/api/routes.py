@@ -1,9 +1,11 @@
 import json
 import re
 from pathlib import Path
-from fastapi import APIRouter, HTTPException, Body
+from fastapi import APIRouter, Body, Depends, HTTPException
 from fastapi.responses import Response
-from app.models.schemas import (
+from sqlalchemy import text
+from sqlalchemy.ext.asyncio import AsyncSession
+from app.MODELS.schemas import (
     TestRequest, TestResponse, Question,
     Part6Passage, Part7Passage, ToeicReadingSection,
     ToeicReadingPart,
@@ -12,11 +14,17 @@ from app.models.schemas import (
     ChatRequest, ChatResponse,
     ExamType, Skill,
 )
+from app.db.database import get_db
 from app.services.llm_service import llm_service
 from app.services.rag_service import rag_service
 from loguru import logger
 
 router = APIRouter(prefix="/api/v1", tags=["ViEng"])
+
+_INTERNAL_ERROR = (
+    "Đã xảy ra lỗi hệ thống. "
+    "Vui lòng thử lại sau."
+)
 
 
 def _clean_json(raw: str) -> str:
@@ -47,6 +55,7 @@ async def generate_test(request: TestRequest):
             level=request.level,
             num_questions=request.num_questions,
             part=request.part,
+            llm_provider=request.llm_provider,
         )
 
         raw_cleaned = _clean_json(raw)
@@ -121,8 +130,8 @@ async def generate_test(request: TestRequest):
         logger.error(f"LLM returned invalid JSON: {raw[:200]}")
         raise HTTPException(status_code=502, detail="LLM trả về dữ liệu không hợp lệ. Vui lòng thử lại.")
     except Exception as e:
-        logger.error(f"Error generating test: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        logger.exception("Error generating test: {}", e)
+        raise HTTPException(status_code=500, detail=_INTERNAL_ERROR)
 
 
 @router.post("/test/submit", response_model=SubmitResponse)
@@ -184,8 +193,8 @@ async def submit_answers(request: SubmitRequest):
             feedbacks=feedbacks,
         )
     except Exception as e:
-        logger.error(f"Error submitting answers: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        logger.exception("Error submitting answers: {}", e)
+        raise HTTPException(status_code=500, detail=_INTERNAL_ERROR)
 
 
 @router.post("/tts")
@@ -204,8 +213,8 @@ async def text_to_speech(text: str = Body(..., embed=True, min_length=1, max_len
             headers={"Content-Disposition": "inline; filename=speech.mp3"},
         )
     except Exception as e:
-        logger.error(f"TTS error: {e}")
-        raise HTTPException(status_code=500, detail=f"Không thể tạo audio: {str(e)}")
+        logger.exception("TTS error: {}", e)
+        raise HTTPException(status_code=500, detail="Không thể tạo audio. Vui lòng thử lại.")
 
 
 @router.post("/translate", response_model=TranslateResponse)
@@ -224,6 +233,7 @@ async def translate_text(request: TranslateRequest):
             direction=request.direction.value,
             level=request.level.value,
             rag_context=rag_context,
+            llm_provider=request.llm_provider,
         )
 
         return TranslateResponse(
@@ -235,8 +245,8 @@ async def translate_text(request: TranslateRequest):
             rag_context=rag_context[:500] if rag_context else "",
         )
     except Exception as e:
-        logger.error(f"Error translating: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        logger.exception("Error translating: {}", e)
+        raise HTTPException(status_code=500, detail=_INTERNAL_ERROR)
 
 
 @router.post("/chat", response_model=ChatResponse)
@@ -257,11 +267,12 @@ async def chat(request: ChatRequest):
             message=request.message,
             history=history,
             rag_context=rag_context,
+            llm_provider=request.llm_provider,
         )
         return ChatResponse(message=reply, sources=sources)
     except Exception as e:
-        logger.error(f"Error in chat: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        logger.exception("Error in chat: {}", e)
+        raise HTTPException(status_code=500, detail=_INTERNAL_ERROR)
 
 
 @router.post("/rag/index")
@@ -280,8 +291,19 @@ async def list_vectorstore(limit: int = 20, offset: int = 0):
         vs = rag_service._get_vectorstore()
         if vs is None:
             return {"chunks": [], "total": 0, "message": "Vectorstore chưa được tạo."}
-        collection = vs._collection
-        data = collection.get(include=["documents", "metadatas"])
+        try:
+            collection = vs._collection
+            data = collection.get(include=["documents", "metadatas"])
+        except Exception as inner:
+            logger.warning("Không đọc được collection nội bộ Chroma: {}", inner)
+            return {
+                "chunks": [],
+                "total": 0,
+                "message": (
+                    "Kh\u00f4ng li\u1ec7t k\u00ea \u0111\u01b0\u1ee3c vectorstore "
+                    "(phi\u00ean b\u1ea3n Chroma ho\u1eb7c l\u1ed7i truy c\u1eadp)."
+                ),
+            }
         docs = data.get("documents") or []
         metas = data.get("metadatas") or [{}] * len(docs)
         total = len(docs)
@@ -298,8 +320,8 @@ async def list_vectorstore(limit: int = 20, offset: int = 0):
             })
         return {"chunks": chunks, "total": total, "limit": limit, "offset": offset}
     except Exception as e:
-        logger.error(f"Error listing vectorstore: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        logger.exception("Error listing vectorstore: {}", e)
+        raise HTTPException(status_code=500, detail=_INTERNAL_ERROR)
 
 
 @router.post("/rag/search")
@@ -309,3 +331,10 @@ async def search_knowledge(query: str):
     if not context:
         return {"results": [], "message": "Không tìm thấy kết quả hoặc vectorstore chưa được tạo."}
     return {"results": context}
+
+
+@router.get("/db/status")
+async def db_status(db: AsyncSession = Depends(get_db)):
+    """Kiểm tra kết nối MySQL khi USE_DATABASE=true."""
+    await db.execute(text("SELECT 1"))
+    return {"status": "ok", "database": "connected"}

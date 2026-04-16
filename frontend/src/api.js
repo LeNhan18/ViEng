@@ -13,6 +13,7 @@ export async function generateTest({ examType, skill, level, numQuestions, part 
     num_questions: numQuestions,
   };
   if (part) body.part = part;
+  if (arguments[0]?.llmProvider) body.llm_provider = arguments[0].llmProvider;
   const { data } = await api.post("/test/generate", body);
   return data;
 }
@@ -39,6 +40,7 @@ export async function translateText({ text, direction, level, useRag }) {
     direction,
     level,
     use_rag: useRag,
+    llm_provider: arguments[0]?.llmProvider || undefined,
   });
   return data;
 }
@@ -53,6 +55,7 @@ export async function chat({ message, history }) {
   const { data } = await api.post("/chat", {
     message,
     history: history || [],
+    llm_provider: arguments[0]?.llmProvider || undefined,
   });
   return data;
 }
