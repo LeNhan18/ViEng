@@ -1,0 +1,48 @@
+services:
+  vieng-backend:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        # lite (default): no torch/transformers; RAG disabled
+        # full: installs full requirements.txt (heavy) and enables RAG
+        VIENG_MODE: ${VIENG_MODE:-lite}
+    container_name: vieng-backend
+    env_file:
+      - .env
+    environment:
+      RAG_ENABLED: ${RAG_ENABLED:-false}
+      # Kết nối MySQL trên máy host (Windows/macOS Docker Desktop).
+      # Nếu bạn không dùng DB, đặt USE_DATABASE=false trong .env.
+      # Lưu ý: docker compose cũng dùng file .env để "nội suy" biến, nên dùng
+      # DB_HOST_DOCKER để tránh bị ghi đè bởi DB_HOST trong app .env.
+      DB_HOST: ${DB_HOST_DOCKER:-host.docker.internal}
+      DB_PORT: ${DB_PORT_DOCKER:-3306}
+    ports:
+      - "8000:8000"
+    volumes:
+      # Persist vectorstore + knowledge base (so you don't re-index every restart)
+      - ./data:/app/data
+      # Persist logs outside container
+      - ./logs:/app/logs
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/api/v1/health').read()"]
+      interval: 15s
+      timeout: 5s
+      retries: 10
+
+  vieng-frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    container_name: vieng-frontend
+    depends_on:
+      vieng-backend:
+        condition: service_healthy
+    ports:
+      # Web UI on http://localhost:3000
+      - "3000:80"
+    restart: unless-stopped
+
+

@@ -5,6 +5,38 @@ const api = axios.create({
   timeout: 60000,
 });
 
+function getToken() {
+  return localStorage.getItem("vieng_access_token");
+}
+
+export function setToken(token) {
+  if (!token) localStorage.removeItem("vieng_access_token");
+  else localStorage.setItem("vieng_access_token", token);
+}
+
+api.interceptors.request.use((config) => {
+  const token = getToken();
+  if (token) config.headers.Authorization = `Bearer ${token}`;
+  return config;
+});
+
+export async function register({ email, password }) {
+  const { data } = await api.post("/auth/register", { email, password });
+  setToken(data.access_token);
+  return data;
+}
+
+export async function login({ email, password }) {
+  const { data } = await api.post("/auth/login", { email, password });
+  setToken(data.access_token);
+  return data;
+}
+
+export async function getMe() {
+  const { data } = await api.get("/auth/me");
+  return data;
+}
+
 export async function generateTest({ examType, skill, level, numQuestions, part }) {
   const body = {
     exam_type: examType,
@@ -56,6 +88,22 @@ export async function chat({ message, history }) {
     message,
     history: history || [],
     llm_provider: arguments[0]?.llmProvider || undefined,
+  });
+  return data;
+}
+
+/**
+ * Gửi ảnh hoặc PDF kèm câu hỏi: backend OCR -> RAG -> LLM trả lời.
+ * Trả về { message, sources, extracted_text, file_name }.
+ */
+export async function chatWithOcr({ message, file, llmProvider }) {
+  const form = new FormData();
+  form.append("file", file);
+  if (message) form.append("message", message);
+  if (llmProvider) form.append("llm_provider", llmProvider);
+  const { data } = await api.post("/chat/ocr", form, {
+    headers: { "Content-Type": "multipart/form-data" },
+    timeout: 120000,
   });
   return data;
 }

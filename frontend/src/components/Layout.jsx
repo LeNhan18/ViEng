@@ -1,5 +1,7 @@
 import { Outlet, Link, useLocation } from "react-router-dom";
-import { Home, GraduationCap, Languages, MessageCircle } from "lucide-react";
+import { Home, GraduationCap, Languages, MessageCircle, LogIn, LogOut, User } from "lucide-react";
+import { setToken, getMe } from "../api";
+import { useEffect, useState } from "react";
 
 const navItems = [
   { path: "/", label: "Trang chủ", icon: Home },
@@ -10,6 +12,27 @@ const navItems = [
 
 export default function Layout() {
   const { pathname } = useLocation();
+  const [me, setMe] = useState(null);
+
+  useEffect(() => {
+    let mounted = true;
+    getMe()
+      .then((u) => {
+        if (mounted) setMe(u);
+      })
+      .catch(() => {
+        if (mounted) setMe(null);
+      });
+    return () => {
+      mounted = false;
+    };
+  }, []);
+
+  function logout() {
+    setToken(null);
+    setMe(null);
+    window.location.href = "/";
+  }
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-slate-50 to-indigo-50">
@@ -37,6 +60,32 @@ export default function Layout() {
                 {label}
               </Link>
             ))}
+
+            <div className="ml-2 h-6 w-px bg-slate-200" />
+
+            {me ? (
+              <button
+                onClick={logout}
+                className="flex items-center gap-2 rounded-lg px-4 py-2 text-sm font-medium text-slate-600 transition-all hover:bg-slate-100 hover:text-slate-900"
+                title={me.email}
+              >
+                <User size={16} />
+                {me.email.split("@")[0]}
+                <LogOut size={16} />
+              </button>
+            ) : (
+              <Link
+                to="/auth?mode=login"
+                className={`flex items-center gap-2 rounded-lg px-4 py-2 text-sm font-medium transition-all ${
+                  pathname.startsWith("/auth")
+                    ? "bg-indigo-600 text-white shadow-md shadow-indigo-200"
+                    : "text-slate-600 hover:bg-slate-100 hover:text-slate-900"
+                }`}
+              >
+                <LogIn size={16} />
+                Đăng nhập
+              </Link>
+            )}
           </nav>
         </div>
       </header>
