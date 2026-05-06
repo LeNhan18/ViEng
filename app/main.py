@@ -41,6 +41,11 @@ async def lifespan(app: FastAPI):
     await init_db()
     from app.services.rag_service import rag_service
 
+    if not settings.rag_enabled:
+        logger.info("RAG disabled (RAG_ENABLED=false) — skip vectorstore startup checks.")
+        yield
+        return
+
     persist_path = Path(settings.chroma_persist_dir)
     if not persist_path.exists() or not any(persist_path.iterdir()):
         logger.info("No vectorstore yet; indexing knowledge base...")

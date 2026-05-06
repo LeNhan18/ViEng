@@ -1,7 +1,3 @@
-from langchain_community.vectorstores import Chroma
-from langchain_community.embeddings import HuggingFaceEmbeddings
-from langchain_text_splitters import RecursiveCharacterTextSplitter
-from langchain_community.document_loaders import DirectoryLoader, TextLoader, PyPDFLoader
 from app.core.config import get_settings
 from loguru import logger
 from pathlib import Path
@@ -18,9 +14,20 @@ class RAGService:
         self._vectorstore = None
         self._persist_dir = settings.chroma_persist_dir
         self._embedding_model = settings.embedding_model
+        self._enabled = bool(settings.rag_enabled)
+
+    def _ensure_enabled(self) -> bool:
+        if not self._enabled:
+            return False
+        return True
 
     def _get_embeddings(self):
+        if not self._ensure_enabled():
+            return None
         if self._embeddings is None:
+            # Lazy import để chế độ "lite" không cần cài langchain/sentence-transformers.
+            from langchain_community.embeddings import HuggingFaceEmbeddings
+
             self._embeddings = HuggingFaceEmbeddings(
                 model_name=self._embedding_model,
                 model_kwargs={"device": "cpu"},
@@ -28,7 +35,11 @@ class RAGService:
         return self._embeddings
 
     def _get_vectorstore(self):
+        if not self._ensure_enabled():
+            return None
         if self._vectorstore is None:
+            from langchain_community.vectorstores import Chroma
+
             persist_path = Path(self._persist_dir)
             if persist_path.exists() and any(persist_path.iterdir()):
                 self._vectorstore = Chroma(
@@ -43,6 +54,14 @@ class RAGService:
 
     def index_knowledge_base(self, docs_dir: str = "data/knowledge_base") -> int:
         """Đọc tài liệu từ thư mục (.txt, .pdf), chia chunks, tạo embeddings và lưu vào ChromaDB."""
+        if not self._ensure_enabled():
+            logger.info("RAG disabled (RAG_ENABLED=false) — skip indexing knowledge base.")
+            return 0
+
+        from langchain_community.vectorstores import Chroma
+        from langchain_text_splitters import RecursiveCharacterTextSplitter
+        from langchain_community.document_loaders import DirectoryLoader, TextLoader, PyPDFLoader
+
         docs_path = Path(docs_dir)
         has_txt = any(docs_path.glob("**/*.txt")) or any(docs_path.glob("**/IELTS_writting_band_decriptors"))
         has_pdf = any(docs_path.glob("**/*.pdf"))
@@ -103,6 +122,8 @@ class RAGService:
 
     def retrieve(self, query: str, k: int = 3) -> str:
         """Truy xuất context liên quan từ knowledge base."""
+        if not self._ensure_enabled():
+            return ""
         vectorstore = self._get_vectorstore()
         if vectorstore is None:
             return ""
@@ -119,6 +140,8 @@ class RAGService:
 
     def retrieve_with_scores(self, query: str, k: int = 5) -> list[tuple]:
         """Truy xuất kèm điểm similarity, lọc theo threshold."""
+        if not self._ensure_enabled():
+            return []
         vectorstore = self._get_vectorstore()
         if vectorstore is None:
             return []
@@ -132,6 +155,8 @@ class RAGService:
 
     def retrieve_mmr(self, query: str, k: int = 3, fetch_k: int = 10, lambda_mult: float = 0.7) -> str:
         """Truy xuất dùng MMR (Maximal Marginal Relevance) để tăng đa dạng kết quả."""
+        if not self._ensure_enabled():
+            return ""
         vectorstore = self._get_vectorstore()
         if vectorstore is None:
             return ""
@@ -163,6 +188,11 @@ def create_standalone_retriever(
     persist_dir: str = "./data/vectorstore",
 ):
     """Tạo retriever standalone (dùng trong scripts, không cần FastAPI)."""
+    from langchain_community.embeddings import HuggingFaceEmbeddings
+    from langchain_community.vectorstores import Chroma
+    from langchain_text_splitters import RecursiveCharacterTextSplitter
+    from langchain_community.document_loaders import DirectoryLoader, TextLoader
+
     embeddings = HuggingFaceEmbeddings(
         model_name=embedding_model,
         model_kwargs={"device": "cpu"},
