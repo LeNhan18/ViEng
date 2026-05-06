@@ -22,6 +22,7 @@ class Settings(BaseSettings):
 
     chroma_persist_dir: str = "./data/vectorstore"
     embedding_model: str = "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2"
+    rag_enabled: bool = True
 
     hf_model_name: str = ""
     use_finetuned_model: bool = False
@@ -32,6 +33,15 @@ class Settings(BaseSettings):
 
     # If non-empty, clients must send header X-API-Key matching this value.
     api_key: str = ""
+
+    # OCR (chat with image/PDF)
+    ocr_enabled: bool = True
+    ocr_max_file_size_mb: int = 10
+
+    # Auth (JWT)
+    jwt_secret: str = "change-me"
+    jwt_algorithm: str = "HS256"
+    jwt_access_token_minutes: int = 60 * 24 * 7
 
     # MySQL async (aiomysql). Enable only when you need persistence.
     use_database: bool = False

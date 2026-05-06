@@ -1,3 +1,6 @@
+# Minimal deps for running ViEng without local embedding/RAG stack.
+# This avoids pulling heavy packages like torch/transformers/sentence-transformers.
+
 # Web framework
 fastapi>=0.115.0
 uvicorn[standard]>=0.32.0
@@ -13,21 +16,8 @@ openai>=1.55.0
 groq>=0.12.0
 huggingface-hub>=0.26.0
 
-# RAG pipeline
-langchain>=0.3.7
-langchain-community>=0.3.7
-pypdf>=5.0.0
-langchain-openai>=0.2.10
-chromadb>=0.5.18
-sentence-transformers>=3.3.0
-
-# Data processing
+# Data processing (light)
 beautifulsoup4>=4.12.3
-pandas>=2.2.3
-datasets>=3.1.0
-
-# Frontend prototype
-streamlit>=1.40.0
 
 # Testing
 pytest>=8.3.3
@@ -36,10 +26,10 @@ pytest-asyncio>=0.24.0
 # Logging
 loguru>=0.7.2
 
-# TTS (phát âm)
+# TTS
 edge-tts>=6.1.0
 
-# OCR (chat with image/PDF) - RapidOCR (ONNX Runtime)
+# OCR (chat with image/PDF) - RapidOCR (ONNX Runtime, không cần torch)
 rapidocr-onnxruntime>=1.4.0
 pypdfium2>=4.30.0
 Pillow>=10.4.0
@@ -51,3 +41,4 @@ aiomysql>=0.2.0
 # Auth
 passlib[bcrypt]>=1.7.4
 PyJWT>=2.9.0
+
