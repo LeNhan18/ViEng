@@ -5,11 +5,12 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 
 WORKDIR /app
 
-# System deps cho OCR (RapidOCR/onnxruntime + opencv-headless).
-# libgomp1: OpenMP runtime cho onnxruntime.
-# libglib2.0-0: cần bởi opencv-python-headless (dependency transient của rapidocr).
+# System deps cho OCR (PaddleOCR / paddlepaddle + opencv).
+# libgomp1: OpenMP runtime (paddlepaddle dùng).
+# libglib2.0-0, libgl1, libsm6, libxext6, libxrender1: opencv-python (full) cần.
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends libgomp1 libglib2.0-0 \
+    && apt-get install -y --no-install-recommends \
+       libgomp1 libglib2.0-0 libgl1 libsm6 libxext6 libxrender1 \
     && rm -rf /var/lib/apt/lists/*
 
 RUN pip install --no-cache-dir --upgrade pip
