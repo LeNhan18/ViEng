@@ -41,6 +41,22 @@ async def lifespan(app: FastAPI):
     await init_db()
     from app.services.rag_service import rag_service
 
+    # Pre-warm OCR engine ở startup để request đầu tiên không bị cold start
+    # (PaddleOCR load + JIT mất ~3-5s lần đầu). Chạy nền trong threadpool để
+    # không block startup; nếu OCR_ENABLED=false thì skip.
+    if settings.ocr_enabled:
+        import asyncio
+        from fastapi.concurrency import run_in_threadpool
+        from app.services.ocr_service import ocr_service
+
+        async def _warm_ocr():
+            try:
+                await run_in_threadpool(ocr_service.warmup)
+            except Exception as e:
+                logger.warning("Pre-warm OCR failed: {}", e)
+
+        asyncio.create_task(_warm_ocr())
+
     if not settings.rag_enabled:
         logger.info("RAG disabled (RAG_ENABLED=false) — skip vectorstore startup checks.")
         yield

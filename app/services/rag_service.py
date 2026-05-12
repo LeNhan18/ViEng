@@ -15,6 +15,10 @@ class RAGService:
         self._persist_dir = settings.chroma_persist_dir
         self._embedding_model = settings.embedding_model
         self._enabled = bool(settings.rag_enabled)
+        # Cờ ghi nhớ load embedder/vectorstore thất bại để khỏi thử lại liên tục
+        # và đỡ spam log. Khi đó RAG hoạt động ở chế độ no-op (trả "" / []).
+        self._embedder_broken = False
+        self._vectorstore_broken = False
 
     def _ensure_enabled(self) -> bool:
         if not self._enabled:
@@ -22,33 +26,56 @@ class RAGService:
         return True
 
     def _get_embeddings(self):
-        if not self._ensure_enabled():
+        if not self._ensure_enabled() or self._embedder_broken:
             return None
         if self._embeddings is None:
-            # Lazy import để chế độ "lite" không cần cài langchain/sentence-transformers.
-            from langchain_community.embeddings import HuggingFaceEmbeddings
+            try:
+                # Lazy import để chế độ "lite" không cần cài langchain/sentence-transformers.
+                from langchain_community.embeddings import HuggingFaceEmbeddings
 
-            self._embeddings = HuggingFaceEmbeddings(
-                model_name=self._embedding_model,
-                model_kwargs={"device": "cpu"},
-            )
+                self._embeddings = HuggingFaceEmbeddings(
+                    model_name=self._embedding_model,
+                    model_kwargs={"device": "cpu"},
+                )
+            except Exception as e:
+                self._embedder_broken = True
+                logger.warning(
+                    "Không khởi tạo được embedder ({}). RAG sẽ tạm thời không hoạt động "
+                    "— pipeline chat vẫn chạy bình thường.",
+                    e,
+                )
+                return None
         return self._embeddings
 
     def _get_vectorstore(self):
-        if not self._ensure_enabled():
+        if not self._ensure_enabled() or self._vectorstore_broken:
             return None
         if self._vectorstore is None:
-            from langchain_community.vectorstores import Chroma
+            try:
+                from langchain_community.vectorstores import Chroma
 
-            persist_path = Path(self._persist_dir)
-            if persist_path.exists() and any(persist_path.iterdir()):
-                self._vectorstore = Chroma(
-                    persist_directory=self._persist_dir,
-                    embedding_function=self._get_embeddings(),
+                persist_path = Path(self._persist_dir)
+                if persist_path.exists() and any(persist_path.iterdir()):
+                    embeddings = self._get_embeddings()
+                    if embeddings is None:
+                        # Embedder broken -> không thể truy vấn vectorstore.
+                        self._vectorstore_broken = True
+                        return None
+                    self._vectorstore = Chroma(
+                        persist_directory=self._persist_dir,
+                        embedding_function=embeddings,
+                    )
+                    logger.info(f"Loaded vectorstore from {self._persist_dir}")
+                else:
+                    logger.warning(
+                        "Vectorstore chưa được tạo. Hãy chạy index_knowledge_base() trước."
+                    )
+                    return None
+            except Exception as e:
+                self._vectorstore_broken = True
+                logger.warning(
+                    "Không load được vectorstore ({}). RAG tắt cho phiên này.", e
                 )
-                logger.info(f"Loaded vectorstore from {self._persist_dir}")
-            else:
-                logger.warning("Vectorstore chưa được tạo. Hãy chạy index_knowledge_base() trước.")
                 return None
         return self._vectorstore
 
@@ -127,8 +154,11 @@ class RAGService:
         vectorstore = self._get_vectorstore()
         if vectorstore is None:
             return ""
-
-        results = vectorstore.similarity_search(query, k=k)
+        try:
+            results = vectorstore.similarity_search(query, k=k)
+        except Exception as e:
+            logger.warning("RAG similarity_search lỗi, bỏ qua context: {}", e)
+            return ""
         if not results:
             return ""
 
@@ -145,8 +175,11 @@ class RAGService:
         vectorstore = self._get_vectorstore()
         if vectorstore is None:
             return []
-
-        results = vectorstore.similarity_search_with_score(query, k=k)
+        try:
+            results = vectorstore.similarity_search_with_score(query, k=k)
+        except Exception as e:
+            logger.warning("RAG similarity_search_with_score lỗi, trả về rỗng: {}", e)
+            return []
         filtered = [
             (doc, score) for doc, score in results
             if score <= self.SCORE_THRESHOLD
@@ -160,10 +193,13 @@ class RAGService:
         vectorstore = self._get_vectorstore()
         if vectorstore is None:
             return ""
-
-        results = vectorstore.max_marginal_relevance_search(
-            query, k=k, fetch_k=fetch_k, lambda_mult=lambda_mult,
-        )
+        try:
+            results = vectorstore.max_marginal_relevance_search(
+                query, k=k, fetch_k=fetch_k, lambda_mult=lambda_mult,
+            )
+        except Exception as e:
+            logger.warning("RAG MMR lỗi, bỏ qua context: {}", e)
+            return ""
         if not results:
             return ""
 
