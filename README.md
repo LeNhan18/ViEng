@@ -74,7 +74,7 @@ The platform focuses on:
   - Part 6 — Text Completion
   - Part 7 — Single & Multiple Passages
 - **Answer explanations** tailored by part (sentence-level vs passage-level reasoning)
-- **Chatbot with RAG** (grounded responses + source hints)
+- **Chatbot with RAG & Session Memory**: Grounded responses, source hints, and persistent chat history using **Redis/Redict** & **MySQL** (automatically loads history for authenticated users).
 - **AI translation** (EN↔VI) with:
   - key vocabulary extraction
   - grammar notes
@@ -176,11 +176,20 @@ cp .env.example .env
 
 Common variables:
 
-| Variable | Description |
-|---------|-------------|
-| `GROQ_API_KEY` | Groq API key |
-| `OPENAI_API_KEY` | OpenAI API key |
-| `LOG_LEVEL` | Logging level (e.g. `info`, `debug`) |
+| Variable | Description | Default |
+|---------|-------------|---------|
+| `GROQ_API_KEY` | Groq API key | |
+| `OPENAI_API_KEY` | OpenAI API key | |
+| `LOG_LEVEL` | Logging level (e.g. `info`, `debug`) | `info` |
+| `USE_DATABASE` | Enable MySQL database persistence | `false` |
+| `DB_HOST` | MySQL server host | `127.0.0.1` |
+| `DB_PORT` | MySQL server port | `3306` |
+| `DB_USER` | MySQL database user | `root` |
+| `DB_PASSWORD` | MySQL database password | |
+| `DB_NAME` | MySQL database name | `vieng` |
+| `USE_REDIS` | Enable Redis/Redict chat history caching | `false` |
+| `REDIS_HOST` | Redis server host | `127.0.0.1` |
+| `REDIS_PORT` | Redis server port | `6379` |
 
 ---
 
@@ -297,7 +306,9 @@ Base prefix: `/api/v1`
 | `GET` | `/health` | Health check |
 | `POST` | `/test/generate` | Generate TOEIC/IELTS questions (TOEIC Reading supports Part 5/6/7 formats) |
 | `POST` | `/test/submit` | Submit answers and get feedback + explanations |
-| `POST` | `/chat` | RAG-grounded chat |
+| `POST` | `/chat` | RAG-grounded chat (saves to memory if user is authenticated) |
+| `GET` | `/chat/history` | Retrieve user's chat history (auth required) |
+| `DELETE` | `/chat/history` | Clear user's chat history (auth required) |
 | `POST` | `/translate` | EN↔VI translation + vocabulary + grammar notes |
 | `POST` | `/tts` | Text-to-speech (English) |
 | `POST` | `/rag/index` | (Re)index knowledge base into Chroma |
