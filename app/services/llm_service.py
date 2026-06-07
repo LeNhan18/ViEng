@@ -4,7 +4,8 @@ from app.core.config import get_settings
 from app.models.schemas import Skill, Level, ExamType, ToeicReadingPart
 from app.services.rag_service import rag_service
 from loguru import logger
-
+from transformers import AutoTokenizer, AutoModelForCausalLM
+import torch
 SYSTEM_PROMPT = (
     "Bạn là giáo viên luyện thi TOEIC/IELTS chuyên nghiệp tại Việt Nam. "
     "Khi được cung cấp tài liệu tham khảo, hãy sử dụng nội dung đó để tạo câu hỏi/giải thích chính xác hơn. "
@@ -48,8 +49,6 @@ class LLMService:
         logger.info(f"Loading fine-tuned model: {settings.hf_model_name}")
 
         try:
-            from transformers import AutoTokenizer, AutoModelForCausalLM
-            import torch
 
             self._hf_tokenizer = AutoTokenizer.from_pretrained(settings.hf_model_name)
             self._hf_model = AutoModelForCausalLM.from_pretrained(
