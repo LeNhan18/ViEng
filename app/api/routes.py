@@ -14,7 +14,7 @@ from app.models.schemas import (
     ToeicReadingPart,
     SubmitRequest, SubmitResponse, Feedback,
     TranslateRequest, TranslateResponse,
-    ChatRequest, ChatResponse, OcrChatResponse,
+    ChatRequest, ChatResponse, OcrChatResponse, ChatMessage,
     ExamType, Skill,
     RegisterRequest, LoginRequest, AuthTokenResponse, UserMeResponse,
 )
@@ -23,6 +23,7 @@ from app.models.orm import User
 from app.services.llm_service import llm_service
 from app.services.ocr_service import OCRError, ocr_service
 from app.services.rag_service import rag_service
+from app.services.chat_memory_service import chat_memory_service
 from app.services.auth_service import (
     create_access_token,
     decode_token,
@@ -56,7 +57,6 @@ _bearer = HTTPBearer(auto_error=False)
 
 async def _get_current_user(
     creds: HTTPAuthorizationCredentials | None = Depends(_bearer),
-    db: AsyncSession = Depends(get_db),
 ) -> User:
     if creds is None or not creds.credentials:
         raise HTTPException(status_code=401, detail="Missing bearer token.")
@@ -65,11 +65,40 @@ async def _get_current_user(
         user_id = int(payload.get("sub"))
     except Exception:
         raise HTTPException(status_code=401, detail="Invalid or expired token.")
-    result = await db.execute(select(User).where(User.id == user_id))
-    user = result.scalar_one_or_none()
-    if user is None:
-        raise HTTPException(status_code=401, detail="User not found.")
-    return user
+
+    if not get_settings().use_database:
+        return User(id=user_id, email="cached_user@example.com")
+
+    from app.db.database import _get_engine_and_sessionmaker
+    _, session_factory = _get_engine_and_sessionmaker()
+    async with session_factory() as session:
+        result = await session.execute(select(User).where(User.id == user_id))
+        user = result.scalar_one_or_none()
+        if user is None:
+            raise HTTPException(status_code=401, detail="User not found.")
+        return user
+
+
+async def _get_current_user_optional(
+    creds: HTTPAuthorizationCredentials | None = Depends(_bearer),
+) -> User | None:
+    if creds is None or not creds.credentials:
+        return None
+    try:
+        payload = decode_token(creds.credentials)
+        user_id = int(payload.get("sub"))
+    except Exception:
+        return None
+
+    if not get_settings().use_database:
+        return User(id=user_id, email="cached_user@example.com")
+
+    from app.db.database import _get_engine_and_sessionmaker
+    _, session_factory = _get_engine_and_sessionmaker()
+    async with session_factory() as session:
+        result = await session.execute(select(User).where(User.id == user_id))
+        user = result.scalar_one_or_none()
+        return user
 
 
 @router.post("/auth/register", response_model=AuthTokenResponse)
@@ -319,26 +348,74 @@ async def translate_text(request: TranslateRequest):
 
 
 @router.post("/chat", response_model=ChatResponse)
-async def chat(request: ChatRequest):
+async def chat(
+    request: ChatRequest,
+    user: User | None = Depends(_get_current_user_optional)
+):
     """Chatbot RAG + LLM: trả lời câu hỏi ngữ pháp/từ vựng TOEIC/IELTS dựa trên knowledge base."""
     try:
-        rag_context = rag_service.retrieve_mmr(request.message, k=4, fetch_k=10)
-        sources = []
-        for m in re.finditer(r"\[Nguồn: ([^\]]+)\]", rag_context or ""):
-            p = m.group(1).strip()
-            name = Path(p).name if "/" in p or "\\" in p else p
-            if name and name not in sources:
-                sources.append(name)
-        sources = sources[:5]
+        settings = get_settings()
+        db = None
+        db_context = None
+        if settings.use_database:
+            from app.db.database import _get_engine_and_sessionmaker
+            _, session_factory = _get_engine_and_sessionmaker()
+            db_context = session_factory()
+            db = await db_context.__aenter__()
 
-        history = [{"role": h.role, "content": h.content} for h in request.history]
-        reply = await llm_service.chat(
-            message=request.message,
-            history=history,
-            rag_context=rag_context,
-            llm_provider=request.llm_provider,
-        )
-        return ChatResponse(message=reply, sources=sources)
+        try:
+            # 1. Tải lịch sử chat từ memory service nếu user đã đăng nhập
+            history = []
+            if user:
+                history = await chat_memory_service.get_history(user.id, db=db)
+
+            # Nếu không có lịch sử trong memory (chưa đăng nhập hoặc là chat đầu tiên), dùng history từ request gửi lên
+            if not history:
+                history = [{"role": h.role, "content": h.content} for h in request.history]
+
+            # 2. Lưu tin nhắn mới của user vào memory nếu đã đăng nhập
+            if user:
+                await chat_memory_service.add_message(
+                    user_id=user.id,
+                    role="user",
+                    content=request.message,
+                    db=db
+                )
+
+            # 3. Truy xuất RAG context
+            rag_context = rag_service.retrieve_mmr(request.message, k=4, fetch_k=10)
+            sources = []
+            for m in re.finditer(r"\[Nguồn: ([^\]]+)\]", rag_context or ""):
+                p = m.group(1).strip()
+                name = Path(p).name if "/" in p or "\\" in p else p
+                if name and name not in sources:
+                    sources.append(name)
+            sources = sources[:5]
+
+            # 4. Gọi LLM để sinh câu trả lời
+            reply = await llm_service.chat(
+                message=request.message,
+                history=history,
+                rag_context=rag_context,
+                llm_provider=request.llm_provider,
+            )
+
+            # 5. Lưu câu trả lời của AI vào memory nếu đã đăng nhập
+            if user:
+                await chat_memory_service.add_message(
+                    user_id=user.id,
+                    role="assistant",
+                    content=reply,
+                    sources=sources,
+                    db=db
+                )
+
+            return ChatResponse(message=reply, sources=sources)
+
+        finally:
+            if db_context:
+                await db_context.__aexit__(None, None, None)
+
     except Exception as e:
         logger.exception("Error in chat: {}", e)
         raise HTTPException(status_code=500, detail=_INTERNAL_ERROR)
@@ -360,6 +437,7 @@ async def chat_with_ocr(
         description="Câu hỏi/yêu cầu của người dùng. Bỏ trống = tự giải thích nội dung.",
     ),
     llm_provider: str | None = Form(None),
+    user: User | None = Depends(_get_current_user_optional),
 ):
     """Nhận ảnh/PDF, OCR ra văn bản rồi gửi vào pipeline chat (RAG + LLM)."""
     if not ocr_service.enabled:
@@ -434,6 +512,38 @@ async def chat_with_ocr(
             rag_context=rag_context,
             llm_provider=llm_provider,
         )
+
+        # Lưu tin nhắn và phản hồi vào memory nếu user đã đăng nhập
+        if user:
+            settings = get_settings()
+            db = None
+            db_context = None
+            if settings.use_database:
+                from app.db.database import _get_engine_and_sessionmaker
+                _, session_factory = _get_engine_and_sessionmaker()
+                db_context = session_factory()
+                db = await db_context.__aenter__()
+            try:
+                user_msg_content = message.strip() or "(đã gửi file)"
+                # Lưu câu hỏi của user
+                await chat_memory_service.add_message(
+                    user_id=user.id,
+                    role="user",
+                    content=user_msg_content,
+                    db=db
+                )
+                # Lưu câu trả lời của AI
+                await chat_memory_service.add_message(
+                    user_id=user.id,
+                    role="assistant",
+                    content=reply,
+                    sources=sources,
+                    db=db
+                )
+            finally:
+                if db_context:
+                    await db_context.__aexit__(None, None, None)
+
         return OcrChatResponse(
             message=reply,
             sources=sources,
@@ -533,3 +643,53 @@ async def db_status(db: AsyncSession = Depends(get_db)):
     """Kiểm tra kết nối MySQL khi USE_DATABASE=true."""
     await db.execute(text("SELECT 1"))
     return {"status": "ok", "database": "connected"}
+
+
+@router.get("/chat/history", response_model=list[ChatMessage])
+async def get_chat_history(
+    user: User = Depends(_get_current_user),
+):
+    """Lấy lịch sử chat của user."""
+    try:
+        settings = get_settings()
+        db = None
+        db_context = None
+        if settings.use_database:
+            from app.db.database import _get_engine_and_sessionmaker
+            _, session_factory = _get_engine_and_sessionmaker()
+            db_context = session_factory()
+            db = await db_context.__aenter__()
+        try:
+            history = await chat_memory_service.get_history(user.id, db=db)
+            return [ChatMessage(role=m["role"], content=m["content"]) for m in history]
+        finally:
+            if db_context:
+                await db_context.__aexit__(None, None, None)
+    except Exception as e:
+        logger.exception("Error in get_chat_history: {}", e)
+        raise HTTPException(status_code=500, detail=_INTERNAL_ERROR)
+
+
+@router.delete("/chat/history")
+async def delete_chat_history(
+    user: User = Depends(_get_current_user),
+):
+    """Xóa lịch sử chat của user."""
+    try:
+        settings = get_settings()
+        db = None
+        db_context = None
+        if settings.use_database:
+            from app.db.database import _get_engine_and_sessionmaker
+            _, session_factory = _get_engine_and_sessionmaker()
+            db_context = session_factory()
+            db = await db_context.__aenter__()
+        try:
+            await chat_memory_service.clear_history(user.id, db=db)
+            return {"status": "ok", "message": "Lịch sử chat đã được xóa."}
+        finally:
+            if db_context:
+                await db_context.__aexit__(None, None, None)
+    except Exception as e:
+        logger.exception("Error in delete_chat_history: {}", e)
+        raise HTTPException(status_code=500, detail=_INTERNAL_ERROR)

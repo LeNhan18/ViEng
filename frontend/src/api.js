@@ -107,3 +107,13 @@ export async function chatWithOcr({ message, file, llmProvider }) {
   });
   return data;
 }
+
+export async function getChatHistory() {
+  const { data } = await api.get("/chat/history");
+  return data;
+}
+
+export async function clearChatHistory() {
+  const { data } = await api.delete("/chat/history");
+  return data;
+}

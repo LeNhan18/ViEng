@@ -1,6 +1,6 @@
 import { useState, useRef, useEffect } from "react";
 import { useLocation } from "react-router-dom";
-import { chat, chatWithOcr } from "../api";
+import { chat, chatWithOcr, getChatHistory, clearChatHistory } from "../api";
 import {
   Send,
   Loader2,
@@ -13,6 +13,7 @@ import {
   Sparkles,
   Bot,
   User,
+  Trash2,
 } from "lucide-react";
 import LlmProviderSelect from "../components/LlmProviderSelect";
 
@@ -51,16 +52,49 @@ export default function Chat() {
     };
   }, [previewUrl]);
 
-  // Handle incoming forwarded query from other pages
+  // Handle chat history fetch and forwarded queries
   useEffect(() => {
-    const state = locationStateRef.current;
-    if (state?.initialMessage) {
-      // Clear history state
-      window.history.replaceState({}, document.title);
-      locationStateRef.current = null;
-      sendSuggestedMessage(state.initialMessage);
+    async function loadInitialData() {
+      const token = localStorage.getItem("vieng_access_token");
+      if (token) {
+        setLoading(true);
+        try {
+          const data = await getChatHistory();
+          if (data && Array.isArray(data)) {
+            setMessages(data);
+          }
+        } catch (err) {
+          console.error("Failed to load chat history", err);
+        } finally {
+          setLoading(false);
+        }
+      }
+
+      const state = locationStateRef.current;
+      if (state?.initialMessage) {
+        // Clear history state
+        window.history.replaceState({}, document.title);
+        locationStateRef.current = null;
+        sendSuggestedMessage(state.initialMessage);
+      }
     }
+    loadInitialData();
   }, []);
+
+  async function handleClearHistory() {
+    if (window.confirm("Bạn có chắc chắn muốn xóa toàn bộ lịch sử chat không?")) {
+      setError("");
+      setLoading(true);
+      try {
+        await clearChatHistory();
+        setMessages([]);
+      } catch (err) {
+        setError(err.response?.data?.detail || "Không thể xóa lịch sử chat.");
+      } finally {
+        setLoading(false);
+      }
+    }
+  }
 
   function handlePickFile(e) {
     const f = e.target.files?.[0];
@@ -193,7 +227,20 @@ export default function Chat() {
             <div className="h-3 w-3 rounded-full bg-green-500 animate-ping" />
             <span className="text-sm font-bold text-slate-700">Thầy cô AI ViEng</span>
           </div>
-          <LlmProviderSelect value={llmProvider} onChange={setLlmProvider} />
+          <div className="flex items-center gap-3">
+            {localStorage.getItem("vieng_access_token") && messages.length > 0 && (
+              <button
+                onClick={handleClearHistory}
+                disabled={loading}
+                title="Xóa lịch sử chat"
+                className="inline-flex items-center gap-1.5 text-xs font-bold text-rose-600 hover:text-rose-700 hover:bg-rose-50 transition-all px-2.5 py-1.5 rounded-xl border border-rose-100 bg-white cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed shadow-sm"
+              >
+                <Trash2 size={13} />
+                <span>Xóa lịch sử</span>
+              </button>
+            )}
+            <LlmProviderSelect value={llmProvider} onChange={setLlmProvider} />
+          </div>
         </div>
 
         {/* Message Area */}

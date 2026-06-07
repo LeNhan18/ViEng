@@ -51,6 +51,13 @@ class Settings(BaseSettings):
     db_password: str = ""
     db_name: str = "vieng"
 
+    # Redis/Redict memory storage
+    use_redis: bool = False
+    redis_host: str = "127.0.0.1"
+    redis_port: int = 6379
+    redis_password: str = ""
+    redis_db: int = 0
+
     @field_validator("cors_origins", mode="before")
     @classmethod
     def strip_cors(cls, v: object) -> object:

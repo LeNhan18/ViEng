@@ -55,3 +55,6 @@ aiomysql>=0.2.0
 # Auth
 bcrypt>=4.2.0
 PyJWT>=2.9.0
+
+# Redis memory
+redis>=5.0.0
