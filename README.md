@@ -36,7 +36,7 @@
 ## Table of Contents
 
 - [Overview](#overview)
-- [Key Features](#key-features)
+- [Key Features & Limitations](#key-features--limitations)
 - [System Architecture](#system-architecture)
 - [Tech Stack](#tech-stack)
 - [Installation & Quickstart](#installation--quickstart)
@@ -54,34 +54,50 @@
 
 ## Overview
 
-**ViEng** is an advanced AI-assisted English exam preparation ecosystem tailored specifically for Vietnamese learners. It features a responsive **web application** (React) and an optional **mobile application** (Flutter/Android), powered by a **RAG (Retrieval-Augmented Generation)** knowledge retrieval engine and dynamic LLM backends.
+**ViEng** là hệ thống hỗ trợ luyện tập tiếng Anh (TOEIC/IELTS) dành cho người Việt. Hệ thống bao gồm giao diện **Web (React)** và ứng dụng **Mobile (Flutter/Android)** kết hợp với cơ chế **RAG (Retrieval-Augmented Generation)** và các mô hình ngôn ngữ lớn (LLM).
 
-The platform is designed to:
-- Generate highly realistic TOEIC/IELTS-style practice tests and questions.
-- Provide detailed answer explanations in a friendly, conversational "Vietnamese teacher" style.
-- Support chat-based Q&A with context memory, grounded in a customizable local knowledge base.
-- Extract complex structures (tables, formulas, texts) from scanned exam sheets or documents using high-fidelity OCR.
-- Perform English-to-Vietnamese translation with automatic key vocabulary extraction, grammar notes, and TTS voice output.
+Hệ thống cung cấp các chức năng thực tế sau:
+- **Luyện đề TOEIC Reading**: Sinh câu hỏi trắc nghiệm tự động theo cấu trúc Part 5, Part 6 và Part 7 (Single/Multiple Passages).
+- **Luyện câu hỏi IELTS Reading dạng trắc nghiệm**: Sinh câu hỏi trắc nghiệm đọc hiểu (không hỗ trợ Listening, Writing, Speaking thực tế).
+- **Giải thích đáp án**: Cung cấp phân tích chi tiết bằng tiếng Việt theo phong cách gần gũi của "thầy cô Việt".
+- **Hỏi đáp với AI (Chỉ có trên Web)**: Chat hỏi đáp ngữ pháp, từ vựng sử dụng dữ liệu RAG (ChromaDB) để đối chiếu tài liệu và lưu lịch sử chat bằng Redis + MySQL.
+- **Đọc hiểu tài liệu PDF/Ảnh (Chỉ có trên Web)**: Trích xuất văn bản có cấu trúc (bảng biểu dưới dạng HTML, công thức LaTeX) từ tài liệu scan bằng PP-StructureV3 để RAG hoặc Chat trực tiếp.
+- **Dịch thuật Anh - Việt**: Dịch câu/đoạn văn kèm trích xuất từ vựng, ngữ pháp chính và phát âm từ vựng qua Edge TTS.
 
 ---
 
-## Key Features
+## Key Features & Limitations
 
-- **Realistic TOEIC Practice Modules**:
-  - **Part 5**: Incomplete Sentences (vocabulary & grammar focus).
-  - **Part 6**: Text Completion (passage-level blanks).
-  - **Part 7**: Single & Multiple Passages (reading comprehension).
-  - *(Lưu ý: Hiện tại hệ thống chỉ hỗ trợ phần Reading từ Part 5 đến Part 7. Các phần Listening từ Part 1 đến Part 4 đang nằm trong lộ trình phát triển).*
-- **Intelligent Explanations**: Deep contextual analysis tailored by question part (sentence-level vs. passage-level logical reasoning).
-- **Context-Aware RAG Chatbot**: Persistent session memory via **Redis/Redict** & **MySQL** database fallback. Grounded responses cite specific sourced documents.
-- **GPU-Accelerated Document Parsing (PP-StructureV3 & PP-OCRv6)**:
-  - Advanced layout analysis to segment images and PDFs.
-  - State-of-the-art text, table (HTML format), and LaTeX mathematical formula recognition.
-  - Native integration with the RAG pipeline to ingest scanned/visual materials.
-- **Interactive EN↔VI Translation**:
-  - Extracts key vocabulary list with definitions.
-  - Lists important grammatical patterns present in the sentence.
-  - English speech synthesis using **Edge TTS**.
+### 1. Luyện thi TOEIC & IELTS
+* **TOEIC Reading (Đầy đủ Part 5, 6, 7)**:
+  * **Part 5 (Incomplete Sentences)**: Điền từ vào câu đơn lẻ.
+  * **Part 6 (Text Completion)**: Điền từ/câu vào đoạn văn ngắn.
+  * **Part 7 (Single & Multiple Passages)**: Đọc hiểu văn bản đơn hoặc nhóm văn bản liên quan.
+* **IELTS (Chỉ hỗ trợ dạng trắc nghiệm Multiple Choice)**:
+  * Sinh các câu hỏi trắc nghiệm đọc hiểu tương tự Part 5/7.
+* **⚠️ Hạn chế quan trọng (Chưa thực hiện)**:
+  * **TOEIC Listening (Part 1-4) chưa được thực hiện** (chưa có tích hợp âm thanh nghe và câu hỏi tương ứng).
+  * **IELTS Listening, Writing, Speaking chưa được thực hiện** (không có audio nghe, không có trình biên tập viết luận chấm điểm, không có ghi âm/chấm điểm nói). Hệ thống chỉ sinh được câu hỏi dạng trắc nghiệm đọc hiểu chung.
+
+### 2. Giải thích đáp án chi tiết
+* Tự động phân tích lý do chọn đáp án đúng/sai, kèm quy tắc ngữ pháp hoặc mẹo nhớ liên quan.
+* Hướng dẫn giải thích bám sát theo từng dạng bài (ví dụ: Part 6/7 bắt buộc đối chiếu nội dung từ đoạn văn).
+
+### 3. Hỏi đáp RAG Chatbot (Chỉ hỗ trợ trên Web UI)
+* Cho phép người dùng trò chuyện, đặt câu hỏi về ngữ pháp/từ vựng dựa trên tài liệu đính kèm hoặc database kiến thức sẵn có (`data/knowledge_base/`).
+* Hỗ trợ lưu trữ lịch sử trò chuyện lâu dài bằng MySQL và lưu bộ nhớ đệm (cache) bằng Redis.
+* **Hạn chế**: Trên app Flutter di động chưa tích hợp giao diện Chat này.
+
+### 4. Trích xuất tài liệu (OCR) bằng PP-StructureV3 (Chỉ hỗ trợ trên Web UI)
+* Sử dụng pipeline PP-StructureV3 chạy trên GPU để phân tích bố cục hình ảnh và PDF scan.
+* Trích xuất văn bản thô, nhận diện bảng biểu (xuất định dạng bảng HTML) và công thức toán học (định dạng LaTeX).
+* Hỗ trợ tải file PDF/ảnh lên khung Chat để hỏi đáp trực tiếp về nội dung file.
+* Hỗ trợ script quét và index tài liệu PDF trong thư mục `data/knowledge_base` vào vector store ChromaDB phục vụ cho RAG.
+
+### 5. Dịch thuật song ngữ EN ↔ VI
+* Dịch văn bản song hướng (Anh-Việt, Việt-Anh) đa cấp độ.
+* Phân tích và liệt kê từ vựng chính (kèm định nghĩa, ví dụ) và các cấu trúc ngữ pháp có trong câu.
+* Hỗ trợ phát âm (TTS) tiếng Anh sử dụng thư viện Edge TTS.
 
 ---
 
@@ -240,18 +256,21 @@ All backend APIs are prefixed with `/api/v1`.
 
 | Method | Endpoint | Description | Auth Required |
 | :--- | :--- | :--- | :---: |
-| `GET` | `/health` | Server health check | No |
-| `POST` | `/test/generate` | Generate realistic TOEIC/IELTS questions | No |
-| `POST` | `/test/submit` | Submit answers and get Vietnamese feedback + explanations | No |
-| `POST` | `/chat` | RAG-guided chatbot (saves to DB and cache if logged in) | Optional |
-| `GET` | `/chat/history` | Get persistent chat history | Yes |
-| `DELETE` | `/chat/history` | Clear chat history | Yes |
-| `POST` | `/chat/ocr` | Upload PDF or image, extract layout + OCR, and chat | Optional |
-| `POST` | `/ocr` | Extract structured text/Markdown from PDF or image (debug) | No |
-| `POST` | `/translate` | Translate text, extract vocabulary and grammar | No |
-| `POST` | `/tts` | Speech synthesis for English text (MP3 stream output) | No |
-| `POST` | `/rag/index` | Parse and index local documents into ChromaDB | No |
-| `GET` | `/rag/list` | List document chunks in the vector database | No |
+| `GET` | `/health` | Kiểm tra trạng thái hoạt động của server | No |
+| `POST` | `/auth/register` | Đăng ký tài khoản người dùng mới | No |
+| `POST` | `/auth/login` | Đăng nhập hệ thống và nhận Bearer JWT token | No |
+| `GET` | `/auth/me` | Lấy thông tin tài khoản người dùng hiện tại | Yes |
+| `POST` | `/test/generate` | Sinh câu hỏi TOEIC Reading (Part 5/6/7) hoặc câu hỏi trắc nghiệm IELTS | No |
+| `POST` | `/test/submit` | Chấm điểm bài làm và sinh lời giải thích chi tiết tiếng Việt | No |
+| `POST` | `/chat` | Chatbot hỏi đáp tiếng Anh có RAG (lưu lịch sử nếu đã đăng nhập) | Optional |
+| `GET` | `/chat/history` | Tải lại toàn bộ lịch sử hội thoại của người dùng | Yes |
+| `DELETE` | `/chat/history` | Xóa sạch lịch sử hội thoại của người dùng | Yes |
+| `POST` | `/chat/ocr` | Tải lên PDF/ảnh, tự động chạy OCR layout và chat hỏi đáp nội dung | Optional |
+| `POST` | `/ocr` | Chỉ chạy OCR trích xuất văn bản từ PDF/ảnh (debug) | No |
+| `POST` | `/translate` | Dịch song ngữ EN-VI kèm trích xuất từ vựng & ngữ pháp | No |
+| `POST` | `/tts` | Phát âm văn bản tiếng Anh bằng giọng đọc máy (Edge TTS) | No |
+| `POST` | `/rag/index` | Quét và index các tài liệu PDF/TXT cục bộ vào cơ sở dữ liệu ChromaDB | No |
+| `GET` | `/rag/list` | Liệt kê danh sách các chunk dữ liệu đã được index trong ChromaDB | No |
 
 ---
 
