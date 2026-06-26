@@ -115,12 +115,41 @@ class RAGService:
             )
             documents.extend(txt_loader.load())
 
-        # Load .pdf
+        # Load .pdf using PP-StructureV3 on GPU via ocr_service
+        from langchain_core.documents import Document
+        from app.services.ocr_service import ocr_service
+        import re
+
         for pdf_file in sorted(docs_path.glob("**/*.pdf")):
             try:
-                docs = PyPDFLoader(str(pdf_file)).load()
+                with open(pdf_file, "rb") as f:
+                    pdf_bytes = f.read()
+
+                # Trích xuất toàn bộ văn bản (có cấu trúc Markdown) từ PDF
+                extracted_text = ocr_service._ocr_pdf_pages(pdf_bytes, max_pages=9999)
+                
+                docs = []
+                # Tách văn bản theo từng trang dựa trên marker [Trang X]
+                parts = re.split(r"\[Trang (\d+)\]\n", extracted_text)
+                if len(parts) > 1:
+                    for idx in range(1, len(parts), 2):
+                        page_num = int(parts[idx])
+                        page_content = parts[idx + 1].strip()
+                        if page_content:
+                            docs.append(Document(
+                                page_content=page_content,
+                                metadata={"source": str(pdf_file), "page": page_num}
+                            ))
+                else:
+                    content = extracted_text.strip()
+                    if content:
+                        docs.append(Document(
+                            page_content=content,
+                            metadata={"source": str(pdf_file)}
+                        ))
+
                 documents.extend(docs)
-                logger.info(f"Đã load PDF: {pdf_file.name} ({len(docs)} trang)")
+                logger.info(f"Đã load PDF bằng PP-StructureV3: {pdf_file.name} ({len(docs)} trang)")
             except Exception as e:
                 logger.warning(f"Không load được PDF {pdf_file.name}: {e}")
 

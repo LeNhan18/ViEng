@@ -21,7 +21,7 @@ class Settings(BaseSettings):
     llm_provider: str = "auto"
 
     chroma_persist_dir: str = "./data/vectorstore"
-    embedding_model: str = "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2"
+    embedding_model: str = "sentence-transformers/models--BAAI--bge-m3"
     rag_enabled: bool = True
 
     hf_model_name: str = ""
