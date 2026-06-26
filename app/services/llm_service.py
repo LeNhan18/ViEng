@@ -50,7 +50,7 @@ class LLMService:
     def __init__(self):
         settings = get_settings()
         self._openai_client = None
-        self._groq_client = None
+        self._openrouter_client = None
         self._hf_model = None
         self._hf_tokenizer = None
 
@@ -58,15 +58,16 @@ class LLMService:
             logger.info(
                 f"Sẽ dùng fine-tuned model: {settings.hf_model_name} (provider={settings.llm_provider})"
             )
-        if settings.openai_api_key:
-            self._openai_client = AsyncOpenAI(api_key=settings.openai_api_key)
-        if settings.groq_api_key:
-            self._groq_client = AsyncGroq(api_key=settings.groq_api_key)
+        if settings.openrouter_api_key:
+            self._openrouter_client = AsyncOpenAI(
+                base_url="https://openrouter.ai/api/v1",
+                api_key=settings.openrouter_api_key,
+            )
 
     def _provider(self, override: str | None = None) -> str:
         settings = get_settings()
         p = (override or settings.llm_provider or "auto").strip().lower()
-        if p not in ("auto", "groq", "openai", "hf_inference", "hf_local"):
+        if p not in ("auto", "openrouter", "hf_inference", "hf_local"):
             logger.warning(f"LLM provider không hợp lệ: {override or settings.llm_provider} -> dùng auto")
             return "auto"
         return p
@@ -163,12 +164,10 @@ class LLMService:
 
     @property
     def _client_and_model(self) -> tuple:
-        if self._groq_client:
-            return self._groq_client, "llama-3.3-70b-versatile"
-        if self._openai_client:
-            return self._openai_client, "gpt-4o-mini"
+        if self._openrouter_client:
+            return self._openrouter_client, "openai/gpt-4o-mini"
         raise RuntimeError(
-            "Chưa cấu hình API key. Thêm OPENAI_API_KEY hoặc GROQ_API_KEY vào .env"
+            "Chưa cấu hình API key. Thêm OPENROUTER_API_KEY vào .env"
         )
 
     @property
@@ -335,10 +334,8 @@ class LLMService:
             )
 
         provider = self._provider(provider_override)
-        if provider == "groq" and self._groq_client:
-            client, model = self._groq_client, "llama-3.3-70b-versatile"
-        elif provider == "openai" and self._openai_client:
-            client, model = self._openai_client, "gpt-4o-mini"
+        if provider == "openrouter" and self._openrouter_client:
+            client, model = self._openrouter_client, "openai/gpt-4o-mini"
         else:
             client, model = self._client_and_model
         response = await client.chat.completions.create(
@@ -575,10 +572,8 @@ class LLMService:
             )
 
         provider = self._provider(llm_provider)
-        if provider == "groq" and self._groq_client:
-            client, model = self._groq_client, "llama-3.3-70b-versatile"
-        elif provider == "openai" and self._openai_client:
-            client, model = self._openai_client, "gpt-4o-mini"
+        if provider == "openrouter" and self._openrouter_client:
+            client, model = self._openrouter_client, "openai/gpt-4o-mini"
         else:
             client, model = self._client_and_model
         response = await client.chat.completions.create(

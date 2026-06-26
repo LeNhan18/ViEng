@@ -419,7 +419,7 @@ async def chat(
 
     except Exception as e:
         logger.exception("Error in chat: {}", e)
-        raise HTTPException(status_code=500, detail=_INTERNAL_ERROR)
+        raise HTTPException(status_code=500, detail=f"DEBUG ERROR: {str(e)}")
 
 
 _OCR_USER_PROMPT_TEMPLATE = (
