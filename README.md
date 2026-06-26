@@ -15,7 +15,7 @@
   <img src="https://img.shields.io/badge/Flutter-02569B?style=flat-square&logo=flutter&logoColor=white" alt="Flutter" />
   <img src="https://img.shields.io/badge/Docker-2496ED?style=flat-square&logo=docker&logoColor=white" alt="Docker" />
   <img src="https://img.shields.io/badge/Kubernetes-326CE5?style=flat-square&logo=kubernetes&logoColor=white" alt="Kubernetes" />
-  <img src="https://img.shields.io/badge/GitHub%20Actions-2088FF?style=flat-square&logo=githubactions&logoColor=white" alt="GitHub Actions" />
+  <img src="https://img.shields.io/badge/CUDA-11.8+-76B900?style=flat-square&logo=nvidia&logoColor=white" alt="CUDA" />
   <img src="https://img.shields.io/badge/License-MIT-green?style=flat-square" alt="License" />
 </p>
 
@@ -37,17 +37,15 @@
 
 - [Overview](#overview)
 - [Key Features](#key-features)
-- [Architecture (High-level)](#architecture-high-level)
+- [System Architecture](#system-architecture)
 - [Tech Stack](#tech-stack)
-- [Quickstart (Local)](#quickstart-local)
-- [Configuration](#configuration)
-- [LLM Providers](#llm-providers)
-- [Docker](#docker)
-- [CI/CD](#cicd)
-- [Kubernetes](#kubernetes)
+- [Installation & Quickstart](#installation--quickstart)
+- [Environment Configuration](#environment-configuration)
+- [LLM & VLM Providers](#llm--vlm-providers)
+- [GPU Acceleration & Cache Redirect](#gpu-acceleration--cache-redirect)
 - [API Reference](#api-reference)
-- [Knowledge Base (RAG)](#knowledge-base-rag)
-- [Fine-tuning](#fine-tuning)
+- [Document Parsing & RAG Ingestion](#document-parsing--rag-ingestion)
+- [Fine-tuning Workflow](#fine-tuning-workflow)
 - [Project Structure](#project-structure)
 - [Roadmap](#roadmap)
 - [License](#license)
@@ -56,106 +54,111 @@
 
 ## Overview
 
-**ViEng** is an AI-assisted English exam preparation platform tailored for Vietnamese learners. It provides a **web app** (React) and an optional **mobile app** (Flutter/Android), powered by a **RAG (Retrieval-Augmented Generation)** pipeline and multiple LLM backends.
+**ViEng** is an advanced AI-assisted English exam preparation ecosystem tailored specifically for Vietnamese learners. It features a responsive **web application** (React) and an optional **mobile application** (Flutter/Android), powered by a **RAG (Retrieval-Augmented Generation)** knowledge retrieval engine and dynamic LLM backends.
 
-The platform focuses on:
-
-- Generating TOEIC/IELTS-style practice content
-- Explaining answers with Vietnamese-teacher style guidance
-- Chat-based Q&A grounded in a curated knowledge base
-- AI translation with vocabulary + grammar notes and optional TTS pronunciation
+The platform is designed to:
+- Generate highly realistic TOEIC/IELTS-style practice tests and questions.
+- Provide detailed answer explanations in a friendly, conversational "Vietnamese teacher" style.
+- Support chat-based Q&A with context memory, grounded in a customizable local knowledge base.
+- Extract complex structures (tables, formulas, texts) from scanned exam sheets or documents using high-fidelity OCR.
+- Perform English-to-Vietnamese translation with automatic key vocabulary extraction, grammar notes, and TTS voice output.
 
 ---
 
 ## Key Features
 
-- **TOEIC Reading practice**:
-  - Part 5 — Incomplete Sentences
-  - Part 6 — Text Completion
-  - Part 7 — Single & Multiple Passages
-- **Answer explanations** tailored by part (sentence-level vs passage-level reasoning)
-- **Chatbot with RAG & Session Memory**: Grounded responses, source hints, and persistent chat history using **Redis/Redict** & **MySQL** (automatically loads history for authenticated users).
-- **AI translation** (EN↔VI) with:
-  - key vocabulary extraction
-  - grammar notes
-  - optional **TTS pronunciation** (Edge TTS) for VI→EN output
-- **Knowledge base ingestion** from `.txt` and `.pdf`
+- **Realistic TOEIC Practice Modules**:
+  - **Part 5**: Incomplete Sentences (vocabulary & grammar focus).
+  - **Part 6**: Text Completion (passage-level blanks).
+  - **Part 7**: Single & Multiple Passages (reading comprehension).
+- **Intelligent Explanations**: Deep contextual analysis tailored by question part (sentence-level vs. passage-level logical reasoning).
+- **Context-Aware RAG Chatbot**: Persistent session memory via **Redis/Redict** & **MySQL** database fallback. Grounded responses cite specific sourced documents.
+- **GPU-Accelerated Document Parsing (PP-StructureV3 & PP-OCRv6)**:
+  - Advanced layout analysis to segment images and PDFs.
+  - State-of-the-art text, table (HTML format), and LaTeX mathematical formula recognition.
+  - Native integration with the RAG pipeline to ingest scanned/visual materials.
+- **Interactive EN↔VI Translation**:
+  - Extracts key vocabulary list with definitions.
+  - Lists important grammatical patterns present in the sentence.
+  - English speech synthesis using **Edge TTS**.
 
 ---
 
-## Architecture (High-level)
+## System Architecture
 
-At runtime, the system looks like:
-
-- **Frontend (React/Vite)** calls the **FastAPI backend**
-- Backend optionally performs **RAG retrieval** (ChromaDB vector store)
-- Backend calls an LLM provider (Groq / OpenAI / Fine-tuned model via Hugging Face)
+```mermaid
+graph TD
+    Client[Client React / Flutter] -->|API Requests| Backend[FastAPI Backend]
+    Backend -->|Check Auth & History| DB[(MySQL Database)]
+    Backend -->|Fast Cache History| Cache[(Redis Session Cache)]
+    Backend -->|Retrieve Context| RAG[RAG Retrieval Engine]
+    RAG -->|Similarity Search| Vector[(ChromaDB Vector Store)]
+    Backend -->|GPU Layout & OCR| OCR[PP-OCRv6 / PP-StructureV3]
+    Backend -->|Generate Answers| LLM[Groq / OpenAI / HF Local Qwen]
+```
 
 ---
 
 ## Tech Stack
 
-| Layer | Technology |
-|------|------------|
+| Layer | Technologies |
+| :--- | :--- |
 | **Backend** | Python 3.11+, FastAPI |
-| **Web** | React, Vite, TailwindCSS |
-| **Mobile (optional)** | Flutter (Android) |
-| **LLM** | Groq / OpenAI / Hugging Face (fine-tuned) |
-| **RAG** | LangChain, ChromaDB |
-| **Embeddings** | sentence-transformers (multilingual) |
-| **TTS** | edge-tts |
+| **Web Frontend** | React 18, Vite, TailwindCSS |
+| **Mobile Frontend** | Flutter (Android SDK) |
+| **LLM Inference** | Groq API / OpenAI API / Hugging Face Inference API / Local Transformers |
+| **OCR & Layout** | PP-OCRv6, PP-StructureV3, PaddleX 3.0, PaddlePaddle-GPU |
+| **Vector Database** | ChromaDB (local persistence) |
+| **Embeddings** | sentence-transformers (`paraphrase-multilingual-MiniLM-L12-v2`) |
+| **TTS Engine** | Edge TTS (async stream) |
 | **Fine-tuning** | QLoRA, Unsloth (Colab) |
-| **Packaging/Deploy** | Docker, Kubernetes (`k8s/`), GitHub Actions (CI + GHCR) |
+| **Deployment** | Docker, Kubernetes (`k8s/`), GitHub Actions |
 
 ---
 
-## Quickstart (Local)
+## Installation & Quickstart
 
 ### Prerequisites
-
 - Python **3.11+**
-- Node.js **18+** (for web)
-- (Optional) Flutter SDK (for Android)
-- LLM API key: Groq or OpenAI (unless you use the fine-tuned HF option)
+- Node.js **18+**
+- (Optional) Flutter SDK (for mobile Android app)
+- (Optional) NVIDIA GPU (CUDA 11.8+) for accelerating PP-OCRv6
 
-### Clone
-
+### Clone Project
 ```bash
 git clone https://github.com/LeNhan18/ViEng.git
 cd ViEng
 ```
 
-### Backend
+### Backend Setup
+1. Create a virtual environment and activate it:
+   ```bash
+   python -m venv venv
+   # Windows
+   venv\Scripts\activate
+   # macOS / Linux
+   source venv/bin/activate
+   ```
+2. Install dependencies:
+   ```bash
+   pip install -r requirements.txt
+   ```
+3. Run the FastAPI development server:
+   ```bash
+   uvicorn app.main:app --reload
+   ```
+   Access interactive API docs at `http://localhost:8000/docs`.
 
-```bash
-python -m venv venv
+### Frontend Setup
+1. Install node modules and run in development mode:
+   ```bash
+   cd frontend
+   npm install --legacy-peer-deps
+   npm run dev
+   ```
+2. Open your browser and navigate to `http://localhost:3000`.
 
-# Windows
-venv\Scripts\activate
-
-# macOS / Linux
-source venv/bin/activate
-
-pip install -r requirements.txt
-uvicorn app.main:app --reload
-```
-
-API docs: `http://localhost:8000/docs`
-
-### Web (React)
-
-```bash
-cd frontend
-npm install --legacy-peer-deps
-npm run dev
-```
-
-Web app: `http://localhost:3000`
-
-> The Vite dev server proxies `/api` to `http://localhost:8000`.
-
-### Mobile (optional)
-
+### Flutter Mobile Setup (Optional)
 ```bash
 cd androidfrontend
 flutter pub get
@@ -164,187 +167,115 @@ flutter run
 
 ---
 
-## Configuration
+## Environment Configuration
 
-The backend reads environment variables from `.env`.
-
-If you have an example file, copy it first:
-
+The backend reads configuration values from a local `.env` file. Copy the example file and modify the keys:
 ```bash
 cp .env.example .env
 ```
 
-Common variables:
-
-| Variable | Description | Default |
-|---------|-------------|---------|
-| `GROQ_API_KEY` | Groq API key | |
-| `OPENAI_API_KEY` | OpenAI API key | |
-| `LOG_LEVEL` | Logging level (e.g. `info`, `debug`) | `info` |
+| Variable Name | Description | Default Value |
+| :--- | :--- | :--- |
+| `GROQ_API_KEY` | API Key for Groq inference provider | |
+| `OPENAI_API_KEY` | API Key for OpenAI models | |
+| `LOG_LEVEL` | Logging level (`debug`, `info`, `warning`) | `info` |
 | `USE_DATABASE` | Enable MySQL database persistence | `false` |
-| `DB_HOST` | MySQL server host | `127.0.0.1` |
-| `DB_PORT` | MySQL server port | `3306` |
-| `DB_USER` | MySQL database user | `root` |
+| `DB_HOST` | Host address of MySQL server | `127.0.0.1` |
+| `DB_PORT` | Port of MySQL server | `3306` |
+| `DB_USER` | MySQL database user name | `root` |
 | `DB_PASSWORD` | MySQL database password | |
 | `DB_NAME` | MySQL database name | `vieng` |
-| `USE_REDIS` | Enable Redis/Redict chat history caching | `false` |
-| `REDIS_HOST` | Redis server host | `127.0.0.1` |
+| `USE_REDIS` | Enable Redis/Redict session caching | `false` |
+| `REDIS_HOST` | Redis host address | `127.0.0.1` |
 | `REDIS_PORT` | Redis server port | `6379` |
+| `PADDLE_PDX_CACHE_HOME` | Model download cache folder for PaddleX/OCR | `E:\AI_CACHE\paddle_ocr` |
+| `TEMP` / `TMP` | Temporary directory redirection for PaddleX extractions | `E:\AI_CACHE\paddle_ocr\temp` |
 
 ---
 
-## LLM Providers
+## LLM & VLM Providers
 
-ViEng supports multiple LLM backends:
+ViEng is highly flexible and supports multiple text generation providers:
+- **Groq**: Extremely fast inference (Llama-3 models).
+- **OpenAI**: High-quality reasoning (GPT-4o).
+- **Fine-tuned Local Model**: Access Qwen2.5-7B fine-tuned specifically for TOEIC/IELTS explanations.
 
-- **Groq** (fast hosted inference)
-- **OpenAI**
-- **Fine-tuned model on Hugging Face** (recommended for “fine-tune mode” in deployments)
-
-Fine-tuned model link:
+Fine-tuned LoRA Adapter link:
 - [LeNhan18/ViEng-Qwen2.5-7B-lora](https://huggingface.co/LeNhan18/ViEng-Qwen2.5-7B-lora)
 
-Enable fine-tuned mode:
-
+To activate fine-tuned mode, configure in `.env`:
 ```env
 USE_FINETUNED_MODEL=true
 HF_MODEL_NAME=LeNhan18/ViEng-Qwen2.5-7B-lora
-
-# Choose how to use the fine-tuned model:
-# - hf_inference: Hugging Face Inference API (lightweight, deploy-friendly)
-# - hf_local: load locally with transformers/torch (heavy; requires GPU/extra deps)
-LLM_PROVIDER=hf_inference
-
-# Optional token (public models may work without it depending on rate limits)
-HF_TOKEN=
-```
-
-Per-request provider override:
-
-- Frontend can send `llm_provider` for `/test/generate`, `/chat`, and `/translate`
-- Supported values: `groq`, `openai`, `hf_inference`, `hf_local`, `auto`
-
----
-
-## Docker
-
-### Backend (FastAPI)
-
-```bash
-docker build -t vieng-backend .
-docker run --rm -p 8000:8000 --env-file .env vieng-backend
-```
-
-### Frontend (Vite build + Nginx)
-
-```bash
-docker build -t vieng-frontend ./frontend
-docker run --rm -p 3000:80 vieng-frontend
+LLM_PROVIDER=hf_inference # 'hf_inference' (Hugging Face API) or 'hf_local' (local GPU loading)
+HF_TOKEN=your_huggingface_token
 ```
 
 ---
 
-## CI/CD
+## GPU Acceleration & Cache Redirect
 
-This repository includes GitHub Actions workflows:
+For deep layout analysis and table OCR, the backend leverages **PP-OCRv6** & **PP-StructureV3**. 
 
-- **CI**: `.github/workflows/ci.yml`
-  - Backend: installs deps and runs `pytest`
-  - Frontend: installs deps and runs `npm run build`
-- **Docker build & push (GHCR)**: `.github/workflows/docker.yml`
-  - Builds and pushes backend/frontend images to `ghcr.io`
-
-Image naming:
-
-- `ghcr.io/<owner>/<repo>-backend:<tag>`
-- `ghcr.io/<owner>/<repo>-frontend:<tag>`
-
-> Note: the workflow pushes images, but does not automatically deploy to a Kubernetes cluster (no `kubectl apply` step yet).
-
----
-
-## Kubernetes
-
-Sample manifests live in `k8s/`:
-
-- `namespace.yaml`
-- `backend-deployment.yaml`, `backend-service.yaml`
-- `frontend-deployment.yaml`, `frontend-service.yaml`
-- `ingress.yaml` (routes `/api` → backend, `/` → frontend)
-
-Apply:
-
+### GPU Support
+Make sure to install the GPU version of PaddlePaddle matching your system's CUDA version. For CUDA 11.8:
 ```bash
-kubectl apply -f k8s/namespace.yaml
-kubectl apply -f k8s/
+pip install paddlepaddle-gpu==3.0.0 -i https://www.paddlepaddle.org.cn/packages/stable/cu118/
 ```
 
-### Secrets (API keys)
-
-Create a secret in the `vieng` namespace:
-
-```bash
-kubectl -n vieng create secret generic vieng-secrets \
-  --from-literal=GROQ_API_KEY="..." \
-  --from-literal=OPENAI_API_KEY="..." \
-  --from-literal=USE_FINETUNED_MODEL="false" \
-  --from-literal=HF_MODEL_NAME="" \
-  --from-literal=LLM_PROVIDER="hf_inference" \
-  --from-literal=HF_TOKEN=""
+### Cache Redirection
+PaddleX downloads several gigabytes of official models (layout detectors, table structurers, formula recognizers). Since Windows system drives (C:) often run out of space, the application automatically redirects all downloads and temp extractions to the **E:** drive (or any custom path specified in `.env`):
+```env
+PADDLE_PDX_CACHE_HOME=E:\AI_CACHE\paddle_ocr
+TEMP=E:\AI_CACHE\paddle_ocr\temp
+TMP=E:\AI_CACHE\paddle_ocr\temp
 ```
-
-Security note: **Never commit secrets to git.** Use GitHub Secrets / Kubernetes Secrets.
 
 ---
 
 ## API Reference
 
-Base prefix: `/api/v1`
+All backend APIs are prefixed with `/api/v1`.
 
-| Method | Endpoint | Description |
-|--------|----------|-------------|
-| `GET` | `/health` | Health check |
-| `POST` | `/test/generate` | Generate TOEIC/IELTS questions (TOEIC Reading supports Part 5/6/7 formats) |
-| `POST` | `/test/submit` | Submit answers and get feedback + explanations |
-| `POST` | `/chat` | RAG-grounded chat (saves to memory if user is authenticated) |
-| `GET` | `/chat/history` | Retrieve user's chat history (auth required) |
-| `DELETE` | `/chat/history` | Clear user's chat history (auth required) |
-| `POST` | `/translate` | EN↔VI translation + vocabulary + grammar notes |
-| `POST` | `/tts` | Text-to-speech (English) |
-| `POST` | `/rag/index` | (Re)index knowledge base into Chroma |
-| `GET` | `/rag/list` | List stored chunks (debug/inspection) |
-| `POST` | `/rag/search` | Search knowledge base |
-
----
-
-## Knowledge Base (RAG)
-
-Place documents into `data/knowledge_base/`:
-
-| Format | Notes |
-|--------|------|
-| `.txt` | Grammar, vocabulary, strategies — UTF-8 |
-| `.pdf` | TOEIC/IELTS materials (parsed by `pypdf`) |
-
-Index:
-
-```bash
-curl -X POST http://localhost:8000/api/v1/rag/index
-```
+| Method | Endpoint | Description | Auth Required |
+| :--- | :--- | :--- | :---: |
+| `GET` | `/health` | Server health check | No |
+| `POST` | `/test/generate` | Generate realistic TOEIC/IELTS questions | No |
+| `POST` | `/test/submit` | Submit answers and get Vietnamese feedback + explanations | No |
+| `POST` | `/chat` | RAG-guided chatbot (saves to DB and cache if logged in) | Optional |
+| `GET` | `/chat/history` | Get persistent chat history | Yes |
+| `DELETE` | `/chat/history` | Clear chat history | Yes |
+| `POST` | `/chat/ocr` | Upload PDF or image, extract layout + OCR, and chat | Optional |
+| `POST` | `/ocr` | Extract structured text/Markdown from PDF or image (debug) | No |
+| `POST` | `/translate` | Translate text, extract vocabulary and grammar | No |
+| `POST` | `/tts` | Speech synthesis for English text (MP3 stream output) | No |
+| `POST` | `/rag/index` | Parse and index local documents into ChromaDB | No |
+| `GET` | `/rag/list` | List document chunks in the vector database | No |
 
 ---
 
-## Fine-tuning
+## Document Parsing & RAG Ingestion
 
-ViEng includes a fine-tuning workflow for **Qwen2.5-7B** using **RAG-augmented** training data (Colab/T4):
+To populate the RAG vector store with custom study material:
+1. Place `.txt` (grammar rules, test tips) or `.pdf` (textbooks, scanned exams) files into `data/knowledge_base/`.
+2. Run the ingestion endpoint:
+   ```bash
+   curl -X POST http://localhost:8000/api/v1/rag/index
+   ```
+3. During indexing, `.pdf` files are parsed using the **PP-StructureV3 GPU pipeline** which converts tables, formulas, and layouts into clean Markdown pages, splitting them indexable chunk-by-chunk for the ChromaDB store.
 
-1. Ensure `data/knowledge_base/` contains `.txt` / `.pdf` documents
-2. Generate dataset: `python scripts/generate_finetune_dataset.py`
-3. Upload `data/finetune_dataset.jsonl` to Colab
-4. Run `FineTune_ViEng.ipynb`
+---
 
-Trained adapter:
-- [LeNhan18/ViEng-Qwen2.5-7B-lora](https://huggingface.co/LeNhan18/ViEng-Qwen2.5-7B-lora)
+## Fine-tuning Workflow
+
+We use **Qwen2.5-7B** as the base model and fine-tune it with RAG-generated training data:
+1. Place source materials in `data/knowledge_base/`.
+2. Generate the training dataset locally:
+   ```bash
+   python scripts/generate_finetune_dataset.py
+   ```
+   This generates `data/finetune_dataset.jsonl`.
+3. Upload the dataset to Google Colab and run the training steps in `FineTune_ViEng.ipynb` using Unsloth.
 
 ---
 
@@ -353,36 +284,38 @@ Trained adapter:
 ```
 ViEng/
 ├── app/                  # FastAPI backend
-│   ├── main.py
-│   ├── api/routes.py
-│   ├── core/config.py
-│   ├── models/schemas.py
-│   └── services/
-│       ├── llm_service.py
-│       └── rag_service.py
-├── frontend/             # React web app
-│   └── src/
-│       ├── pages/        # Home, Exam, Result, Chat, Translate
-│       └── components/
-├── androidfrontend/      # Flutter Android app (optional)
+│   ├── api/routes.py     # Endpoint routing
+│   ├── core/config.py    # Environment settings
+│   ├── db/database.py    # MySQL connection & schemas
+│   ├── models/           # SQLAlchemy ORM and Pydantic schemas
+│   └── services/         # Business logic
+│       ├── ocr_service.py # PP-StructureV3 GPU integration
+│       ├── rag_service.py # ChromaDB context indexing & search
+│       └── llm_service.py # OpenAI / Groq / HF local model wrapper
+├── frontend/             # React web application
+│   ├── src/
+│   │   ├── pages/        # Home, Chat, Exam, Result, Translate pages
+│   │   └── components/   # Chat bubbles, timers, loaders
+├── androidfrontend/      # Flutter Android app
 ├── data/
-│   ├── knowledge_base/   # .txt, .pdf
-│   └── vectorstore/      # ChromaDB persistence
-├── k8s/                  # Kubernetes manifests (optional deployment)
-├── scripts/
-└── tests/
+│   ├── knowledge_base/   # PDF/TXT training data & RAG corpus
+│   └── vectorstore/      # ChromaDB storage directory
+├── k8s/                  # Kubernetes deployment manifests
+├── scripts/              # Dataset generation & tools
+└── tests/                # Pytest api tests
 ```
 
 ---
 
 ## Roadmap
 
-- TOEIC Listening (Part 1–4)
-- IELTS Reading/Writing enhancements
-- Learning progress tracking and sessions
+- [ ] Support TOEIC Listening simulation (Parts 1–4 with audio integration).
+- [ ] Add IELTS Writing evaluation (grading grammar, vocabulary, task response).
+- [ ] Implement spaced repetition vocabulary card decks.
+- [ ] Add student performance analytics & score tracker graphs.
 
 ---
 
 ## License
 
-MIT License — see [LICENSE](LICENSE).
+This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
