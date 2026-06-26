@@ -1,3 +1,5 @@
+--extra-index-url https://www.paddlepaddle.org.cn/packages/stable/cu118/
+
 # Web framework
 fastapi>=0.115.0
 uvicorn[standard]>=0.32.0
