@@ -71,6 +71,7 @@ The platform is designed to:
   - **Part 5**: Incomplete Sentences (vocabulary & grammar focus).
   - **Part 6**: Text Completion (passage-level blanks).
   - **Part 7**: Single & Multiple Passages (reading comprehension).
+  - *(Lưu ý: Hiện tại hệ thống chỉ hỗ trợ phần Reading từ Part 5 đến Part 7. Các phần Listening từ Part 1 đến Part 4 đang nằm trong lộ trình phát triển).*
 - **Intelligent Explanations**: Deep contextual analysis tailored by question part (sentence-level vs. passage-level logical reasoning).
 - **Context-Aware RAG Chatbot**: Persistent session memory via **Redis/Redict** & **MySQL** database fallback. Grounded responses cite specific sourced documents.
 - **GPU-Accelerated Document Parsing (PP-StructureV3 & PP-OCRv6)**:
