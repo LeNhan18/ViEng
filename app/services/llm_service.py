@@ -6,11 +6,42 @@ from app.services.rag_service import rag_service
 from loguru import logger
 from transformers import AutoTokenizer, AutoModelForCausalLM
 import torch
+import random
+
 SYSTEM_PROMPT = (
     "Bạn là giáo viên luyện thi TOEIC/IELTS chuyên nghiệp tại Việt Nam. "
     "Khi được cung cấp tài liệu tham khảo, hãy sử dụng nội dung đó để tạo câu hỏi/giải thích chính xác hơn. "
     "Luôn trả về JSON hợp lệ khi được yêu cầu."
 )
+
+GRAMMAR_TOPICS = [
+    "verb tenses (present, past, future perfect/continuous)",
+    "word forms (nouns, verbs, adjectives, adverbs)",
+    "subject-verb agreement",
+    "passive voice",
+    "conditionals & inversions (type 1, 2, 3, mixed)",
+    "conjunctions & connectors (although, because, however, etc.)",
+    "relative clauses & reduced relative clauses",
+    "comparisons (comparatives, superlatives, double comparisons)",
+    "gerunds vs infinitives (to-infinitive, bare infinitive, -ing)",
+    "reported speech & subjunctive mood",
+    "articles and quantifiers (some, any, much, many, each, every)",
+    "prepositions of time, place, and direction",
+    "phrasal verbs & collocations",
+]
+
+BUSINESS_TOPICS = [
+    "office administration & workplace management (supplies, memos, meetings)",
+    "recruitment, hiring, human resources & employee benefits",
+    "marketing, sales, advertising campaigns & customer feedback",
+    "shipping, logistics, inventory management & deliveries",
+    "business travel, conferences, trade shows & corporate events",
+    "financial services, banking, accounting, budgeting & invoices",
+    "contracts, negotiations, business agreements & partnership proposals",
+    "customer support, client relations & product warranties",
+    "purchasing, ordering, store transactions & retail management",
+    "technology, software updates, online security & IT troubleshooting",
+]
 
 
 class LLMService:
@@ -63,7 +94,7 @@ class LLMService:
             logger.info("Fallback sang Groq/OpenAI API")
             self._hf_model = None
 
-    async def _generate_with_hf(self, prompt: str, max_tokens: int = 1000, system_msg: str = "") -> str:
+    async def _generate_with_hf(self, prompt: str, max_tokens: int = 1000, system_msg: str = "", temperature: float = 0.7) -> str:
         """Generate text bằng fine-tuned model local."""
         import torch
 
@@ -84,14 +115,14 @@ class LLMService:
             outputs = self._hf_model.generate(
                 input_ids=inputs,
                 max_new_tokens=max_tokens,
-                temperature=0.7,
+                temperature=temperature,
                 do_sample=True,
             )
 
         return self._hf_tokenizer.decode(outputs[0][inputs.shape[-1]:], skip_special_tokens=True)
 
     async def _generate_with_hf_inference(
-        self, prompt: str, max_tokens: int = 1000, system_msg: str = ""
+        self, prompt: str, max_tokens: int = 1000, system_msg: str = "", temperature: float = 0.7
     ) -> str:
         """
         Generate text bằng Hugging Face Inference API (không load model local).
@@ -123,7 +154,7 @@ class LLMService:
             return client.text_generation(
                 full_prompt,
                 max_new_tokens=max_tokens,
-                temperature=0.7,
+                temperature=temperature,
                 do_sample=True,
                 return_full_text=False,
             )
@@ -146,13 +177,13 @@ class LLMService:
         return settings.use_finetuned_model and settings.hf_model_name
 
     async def _call_finetuned(
-        self, prompt: str, max_tokens: int, system_msg: str, *, provider_override: str | None = None
+        self, prompt: str, max_tokens: int, system_msg: str, *, provider_override: str | None = None, temperature: float = 0.7
     ) -> str:
         p = self._provider(provider_override)
         if p in ("hf_inference",):
-            return await self._generate_with_hf_inference(prompt, max_tokens=max_tokens, system_msg=system_msg)
+            return await self._generate_with_hf_inference(prompt, max_tokens=max_tokens, system_msg=system_msg, temperature=temperature)
         # "auto" hoặc "hf_local" -> ưu tiên local (giữ kỹ thuật cũ)
-        return await self._generate_with_hf(prompt, max_tokens=max_tokens, system_msg=system_msg)
+        return await self._generate_with_hf(prompt, max_tokens=max_tokens, system_msg=system_msg, temperature=temperature)
 
     def _build_rag_context_section(self, rag_context: str) -> str:
         """Tạo đoạn RAG context để chèn vào prompt."""
@@ -163,7 +194,7 @@ class LLMService:
             f"---\n{rag_context}\n---\n"
         )
 
-    def _retrieve_for_part(self, part: str, level: Level) -> str:
+    def _retrieve_for_part(self, part: str, level: Level, extra_query: str = "") -> str:
         """Retrieve RAG context phù hợp cho từng dạng Part."""
         queries = {
             "part5": f"TOEIC Part 5 grammar rules word forms tenses prepositions {level.value}",
@@ -171,17 +202,27 @@ class LLMService:
             "part7_single": f"TOEIC Part 7 reading comprehension vocabulary business {level.value}",
             "part7_multiple": f"TOEIC Part 7 multiple passages vocabulary business communication {level.value}",
         }
-        query = queries.get(part, f"TOEIC grammar vocabulary {level.value}")
+        base_query = queries.get(part, f"TOEIC grammar vocabulary {level.value}")
+        if extra_query:
+            query = f"{base_query} {extra_query}"
+        else:
+            query = base_query
         return rag_service.retrieve_mmr(query, k=3)
 
-    def _build_part5_prompt(self, level: Level, num_questions: int, rag_context: str = "") -> str:
-        base = (
-            f"Tạo {num_questions} câu hỏi TOEIC Reading Part 5 (Incomplete Sentences) trình độ {level.value}.\n\n"
-            "Format chuẩn TOEIC Part 5:\n"
+    def _build_part5_prompt(
+        self, level: Level, num_questions: int, rag_context: str = "", grammar_topic: str = "", business_topic: str = ""
+    ) -> str:
+        base = f"Tạo {num_questions} câu hỏi TOEIC Reading Part 5 (Incomplete Sentences) trình độ {level.value}.\n\n"
+        if grammar_topic:
+            base += f"- Trọng tâm ngữ pháp cần kiểm tra: {grammar_topic}\n"
+        if business_topic:
+            base += f"- Ngữ cảnh/Chủ đề từ vựng: {business_topic}\n"
+
+        base += (
+            "\nFormat chuẩn TOEIC Part 5:\n"
             "- Mỗi câu là 1 câu tiếng Anh có 1 chỗ trống (___)\n"
             "- 4 đáp án A, B, C, D\n"
             "- Kiểm tra ngữ pháp (thì, dạng từ, giới từ, mệnh đề quan hệ...) hoặc từ vựng\n"
-            "- Chủ đề: công việc, email, hợp đồng, kinh doanh\n"
         )   
         base += self._build_rag_context_section(rag_context)
         base += (
@@ -193,10 +234,17 @@ class LLMService:
         )
         return base
 
-    def _build_part6_prompt(self, level: Level, num_passages: int, rag_context: str = "") -> str:
-        base = (
-            f"Tạo {num_passages} đoạn văn TOEIC Reading Part 6 (Text Completion) trình độ {level.value}.\n\n"
-            "Format chuẩn TOEIC Part 6:\n"
+    def _build_part6_prompt(
+        self, level: Level, num_passages: int, rag_context: str = "", grammar_topic: str = "", business_topic: str = ""
+    ) -> str:
+        base = f"Tạo {num_passages} đoạn văn TOEIC Reading Part 6 (Text Completion) trình độ {level.value}.\n\n"
+        if grammar_topic:
+            base += f"- Trọng tâm ngữ pháp cần kiểm tra: {grammar_topic}\n"
+        if business_topic:
+            base += f"- Ngữ cảnh/Chủ đề từ vựng: {business_topic}\n"
+
+        base += (
+            "\nFormat chuẩn TOEIC Part 6:\n"
             "- Mỗi đoạn là 1 email/memo/thông báo/bài báo ngắn (100-150 từ)\n"
             "- Mỗi đoạn có đúng 4 chỗ trống đánh số (1), (2), (3), (4)\n"
             "- Mỗi chỗ trống có 4 đáp án A, B, C, D\n"
@@ -214,10 +262,17 @@ class LLMService:
         )
         return base
 
-    def _build_part7_single_prompt(self, level: Level, num_passages: int, rag_context: str = "") -> str:
-        base = (
-            f"Tạo {num_passages} bài đọc TOEIC Reading Part 7 Single Passage trình độ {level.value}.\n\n"
-            "Format chuẩn TOEIC Part 7 Single:\n"
+    def _build_part7_single_prompt(
+        self, level: Level, num_passages: int, rag_context: str = "", grammar_topic: str = "", business_topic: str = ""
+    ) -> str:
+        base = f"Tạo {num_passages} bài đọc TOEIC Reading Part 7 Single Passage trình độ {level.value}.\n\n"
+        if grammar_topic:
+            base += f"- Trọng tâm ngữ pháp cần lồng ghép: {grammar_topic}\n"
+        if business_topic:
+            base += f"- Ngữ cảnh/Chủ đề từ vựng chính: {business_topic}\n"
+
+        base += (
+            "\nFormat chuẩn TOEIC Part 7 Single:\n"
             "- Mỗi bài là 1 đoạn văn (email, quảng cáo, thông báo, tin nhắn, bài báo) dài 150-250 từ\n"
             "- Mỗi bài có 2-4 câu hỏi\n"
             "- Dạng câu hỏi: ý chính, chi tiết, suy luận, từ đồng nghĩa, mục đích người viết\n"
@@ -234,10 +289,17 @@ class LLMService:
         )
         return base
 
-    def _build_part7_multiple_prompt(self, level: Level, num_sets: int, rag_context: str = "") -> str:
-        base = (
-            f"Tạo {num_sets} bộ TOEIC Reading Part 7 Multiple Passages trình độ {level.value}.\n\n"
-            "Format chuẩn TOEIC Part 7 Multiple:\n"
+    def _build_part7_multiple_prompt(
+        self, level: Level, num_sets: int, rag_context: str = "", grammar_topic: str = "", business_topic: str = ""
+    ) -> str:
+        base = f"Tạo {num_sets} bộ TOEIC Reading Part 7 Multiple Passages trình độ {level.value}.\n\n"
+        if grammar_topic:
+            base += f"- Trọng tâm ngữ pháp cần lồng ghép: {grammar_topic}\n"
+        if business_topic:
+            base += f"- Ngữ cảnh/Chủ đề từ vựng chính: {business_topic}\n"
+
+        base += (
+            "\nFormat chuẩn TOEIC Part 7 Multiple:\n"
             "- Mỗi bộ gồm 2-3 đoạn văn liên quan (email + reply, quảng cáo + review, memo + schedule...)\n"
             "- Mỗi bộ có 5 câu hỏi\n"
             "- Câu hỏi yêu cầu liên kết thông tin giữa các đoạn\n"
@@ -261,11 +323,15 @@ class LLMService:
         system_msg: str = "",
         *,
         provider_override: str | None = None,
+        temperature: float | None = None,
     ) -> str:
         sys_content = system_msg or SYSTEM_PROMPT
+        temp = temperature if temperature is not None else round(random.uniform(0.75, 0.9), 2)
+        logger.info(f"Using temperature = {temp} for question/response generation")
+        
         if self._use_finetuned:
             return await self._call_finetuned(
-                prompt, max_tokens=max_tokens, system_msg=sys_content, provider_override=provider_override
+                prompt, max_tokens=max_tokens, system_msg=sys_content, provider_override=provider_override, temperature=temp
             )
 
         provider = self._provider(provider_override)
@@ -281,7 +347,7 @@ class LLMService:
                 {"role": "system", "content": sys_content},
                 {"role": "user", "content": prompt},
             ],
-            temperature=0.7,
+            temperature=temp,
             max_tokens=max_tokens,
         )
         return response.choices[0].message.content
@@ -298,38 +364,48 @@ class LLMService:
     ) -> str:
         logger.info(f"Generating questions: {exam_type}/{skill}/{level} part={part} n={num_questions}")
 
+        selected_grammar = random.choice(GRAMMAR_TOPICS)
+        selected_business = random.choice(BUSINESS_TOPICS)
+        logger.info(f"Selected random grammar topic: {selected_grammar}")
+        logger.info(f"Selected random business topic: {selected_business}")
+
+        random_temp = round(random.uniform(0.75, 0.9), 2)
+
         if exam_type == ExamType.TOEIC and skill == Skill.READING and part:
-            rag_context = self._retrieve_for_part(part.value, level)
+            extra_query = f"{selected_grammar} {selected_business}"
+            rag_context = self._retrieve_for_part(part.value, level, extra_query)
             if rag_context:
                 logger.info(f"RAG context retrieved for {part.value} ({len(rag_context)} chars)")
 
             if part == ToeicReadingPart.PART5:
-                prompt = self._build_part5_prompt(level, num_questions, rag_context)
-                return await self._call_llm(prompt, max_tokens=2000, provider_override=llm_provider)
+                prompt = self._build_part5_prompt(level, num_questions, rag_context, selected_grammar, selected_business)
+                return await self._call_llm(prompt, max_tokens=2000, provider_override=llm_provider, temperature=random_temp)
 
             elif part == ToeicReadingPart.PART6:
                 num_passages = max(1, num_questions // 4)
-                prompt = self._build_part6_prompt(level, num_passages, rag_context)
-                return await self._call_llm(prompt, max_tokens=3000, provider_override=llm_provider)
+                prompt = self._build_part6_prompt(level, num_passages, rag_context, selected_grammar, selected_business)
+                return await self._call_llm(prompt, max_tokens=3000, provider_override=llm_provider, temperature=random_temp)
 
             elif part == ToeicReadingPart.PART7_SINGLE:
                 num_passages = max(1, num_questions // 3)
-                prompt = self._build_part7_single_prompt(level, num_passages, rag_context)
-                return await self._call_llm(prompt, max_tokens=4000, provider_override=llm_provider)
+                prompt = self._build_part7_single_prompt(level, num_passages, rag_context, selected_grammar, selected_business)
+                return await self._call_llm(prompt, max_tokens=4000, provider_override=llm_provider, temperature=random_temp)
 
             elif part == ToeicReadingPart.PART7_MULTIPLE:
                 num_sets = max(1, num_questions // 5)
-                prompt = self._build_part7_multiple_prompt(level, num_sets, rag_context)
-                return await self._call_llm(prompt, max_tokens=4000, provider_override=llm_provider)
+                prompt = self._build_part7_multiple_prompt(level, num_sets, rag_context, selected_grammar, selected_business)
+                return await self._call_llm(prompt, max_tokens=4000, provider_override=llm_provider, temperature=random_temp)
 
         rag_context = rag_service.retrieve_mmr(
-            f"TOEIC IELTS grammar vocabulary {skill.value} {level.value}", k=2,
+            f"{exam_type.value} grammar vocabulary {skill.value} {level.value} {selected_grammar} {selected_business}", k=2,
         )
         rag_section = self._build_rag_context_section(rag_context)
 
         prompt = (
             f"Bạn là một giáo viên luyện thi {exam_type.value.upper()} giàu kinh nghiệm tại Việt Nam.\n"
-            f"Hãy tạo {num_questions} câu hỏi {skill.value} trình độ {level.value}.\n\n"
+            f"Hãy tạo {num_questions} câu hỏi {skill.value} trình độ {level.value}.\n"
+            f"Chủ đề ngữ pháp cần tập trung: {selected_grammar}.\n"
+            f"Bối cảnh câu hỏi: {selected_business}.\n\n"
             f"Yêu cầu:\n"
             f"- Mỗi câu hỏi có 4 đáp án A, B, C, D (nếu là reading/listening)\n"
             f"- Đánh dấu đáp án đúng\n"
@@ -339,7 +415,7 @@ class LLMService:
             f'  [{{"id": 1, "content": "...", "options": ["A. ...", "B. ...", "C. ...", "D. ..."], "correct_answer": "A"}}]\n'
             f"- Chỉ trả về JSON, không thêm text khác."
         )
-        return await self._call_llm(prompt, provider_override=llm_provider)
+        return await self._call_llm(prompt, provider_override=llm_provider, temperature=random_temp)
 
     def _part_explanation_guidance(self, part: str | None) -> str:
         """Hướng dẫn giải thích khác nhau theo Part 5/6/7."""
