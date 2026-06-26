@@ -131,13 +131,9 @@ export default function Chat() {
       attachment: null,
     };
     
-    // We capture history before updating state
-    setMessages((prev) => {
-      const updated = [...prev, userMsg];
-      // Run the network request immediately
-      performChatRequest(msgText, null, updated.slice(0, -1));
-      return updated;
-    });
+    setMessages((prev) => [...prev, userMsg]);
+    // Run the network request outside of the state setter to avoid React StrictMode double invocation
+    performChatRequest(msgText, null, messages);
   }
 
   async function performChatRequest(text, fileSnapshot, priorMessages) {
@@ -194,11 +190,9 @@ export default function Chat() {
         : null,
     };
 
-    setMessages((prev) => {
-      const updated = [...prev, userMsg];
-      performChatRequest(text, fileSnapshot, updated.slice(0, -1));
-      return updated;
-    });
+    const priorMessages = [...messages];
+    setMessages([...priorMessages, userMsg]);
+    performChatRequest(text, fileSnapshot, priorMessages);
 
     setInput("");
     setAttachedFile(null);

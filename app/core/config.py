@@ -1,9 +1,9 @@
 from functools import lru_cache
-
+from dotenv import load_dotenv
 from pydantic import field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
-
-
+import os
+load_dotenv()
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", extra="ignore")
 
@@ -12,12 +12,12 @@ class Settings(BaseSettings):
     app_port: int = 8000
     log_level: str = "info"
 
-    openai_api_key: str = ""
-    groq_api_key: str = ""
-
+    # Pydantic BaseSettings tự động đọc từ .env, chỉ cần khai báo kiểu dữ liệu.
+    # Đảm bảo trong file .env bạn đặt tên biến là OPENROUTER_API_KEY
+    openrouter_api_key: str = ""
     # LLM provider:
-    # - "auto": ưu tiên Groq -> OpenAI; nếu USE_FINETUNED_MODEL=true thì dùng HF (local hoặc inference)
-    # - "groq" | "openai" | "hf_inference" | "hf_local"
+    # - "auto": ưu tiên OpenRouter -> Groq -> OpenAI; nếu USE_FINETUNED_MODEL=true thì dùng HF (local hoặc inference)
+    # - "openrouter" | "groq" | "openai" | "hf_inference" | "hf_local"
     llm_provider: str = "auto"
 
     chroma_persist_dir: str = "./data/vectorstore"
