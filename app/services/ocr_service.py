@@ -64,64 +64,31 @@ class OCRService:
         return self._max_bytes
 
     def _load_engine(self):
-        """Lazy-load PaddleOCR. Tránh chi phí import lúc khởi động app."""
+        """Lazy-load PPStructureV3. Tránh chi phí import lúc khởi động app."""
         if self._engine_ready:
             return self._engine
 
-        # Workaround conflict DLL trên Windows: PaddlePaddle load oneDNN/MKL
-        # version khác torch, nếu Paddle load trước thì torch import sau
-        # bị `WinError 127 - shm.dll`. Force-import torch sớm (nếu có) để
-        # giữ thứ tự load DLL hợp lệ. Trong chế độ lite (không có torch),
-        # bỏ qua nhánh này hoàn toàn.
-        try:
-            import torch  # noqa: F401  # type: ignore
-        except Exception:
-            pass
-
-        # Cấu hình hiệu năng:
-        # - enable_mkldnn=True: dùng oneDNN trên CPU, tăng tốc 2-3x.
-        # - cpu_threads: tận dụng đa nhân (mặc định 10).
-        # - use_angle_cls=False: ảnh đề thi hiếm khi xoay 180°, tắt classifier
-        #   tiết kiệm 1 model + ~30% latency. Bật lại nếu cần xử lý ảnh xoay.
-        cpu_threads = max(2, (os.cpu_count() or 4))
+        import os
+        # Cấu hình cache và temp directories để không tốn dung lượng ổ C:
+        os.makedirs('E:\\AI_CACHE\\paddle_ocr\\temp', exist_ok=True)
+        os.environ['TEMP'] = 'E:\\AI_CACHE\\paddle_ocr\\temp'
+        os.environ['TMP'] = 'E:\\AI_CACHE\\paddle_ocr\\temp'
+        os.environ['PADDLE_PDX_CACHE_HOME'] = 'E:\\AI_CACHE\\paddle_ocr'
 
         try:
-            from paddleocr import PaddleOCR  # type: ignore
-
-            # Cố gắng khởi tạo theo API 3.x trước (kwargs mới),
-            # rơi về kwargs 2.x khi fail (nhiều unexpected keyword).
+            # Workaround conflict DLL trên Windows:
             try:
-                self._engine = PaddleOCR(
-                    use_doc_orientation_classify=False,
-                    use_doc_unwarping=False,
-                    use_textline_orientation=False,
-                    lang="en",
-                )
-                self._engine_api = (
-                    "predict" if hasattr(self._engine, "predict") else "ocr"
-                )
-            except TypeError:
-                self._engine = PaddleOCR(
-                    use_angle_cls=False,
-                    lang="en",
-                    show_log=False,
-                    enable_mkldnn=True,
-                    cpu_threads=cpu_threads,
-                )
-                self._engine_api = "ocr"
+                import torch  # type: ignore
+            except Exception:
+                pass
 
+            from paddleocr import PPStructureV3  # type: ignore
+            # Khởi tạo pipeline PP-StructureV3 chạy trên GPU (tự động phát hiện)
+            self._engine = PPStructureV3()
             self._engine_ready = True
-            logger.info(
-                "PaddleOCR engine loaded (api={}, mkldnn=on, threads={}).",
-                self._engine_api,
-                cpu_threads,
-            )
+            logger.info("PP-OCRv6 Pipeline (PP-StructureV3) loaded successfully on GPU.")
         except Exception as e:
-            logger.error(
-                "Không thể load PaddleOCR. "
-                "Hãy cài paddleocr + paddlepaddle. Lỗi: {}",
-                e,
-            )
+            logger.error("Không thể load PPStructureV3. Hãy cài paddleocr + paddlepaddle-gpu. Lỗi: {}", e)
             self._engine = None
             self._engine_ready = True
         return self._engine
@@ -131,14 +98,19 @@ class OCRService:
 
         Gọi 1 lần khi app startup để request đầu tiên không bị cold start.
         """
+        import sys
+        if "pytest" in sys.modules:
+            logger.info("Chạy trong môi trường test, bỏ qua OCR warmup.")
+            return
+
         try:
             engine = self._load_engine()
             if engine is None:
                 return
-            # Ảnh trắng nhỏ, OCR sẽ trả rỗng nhưng warm hết các graph.
-            dummy = np.full((48, 320, 3), 255, dtype=np.uint8)
+            # Ảnh trắng nhỏ, chạy qua pipeline
+            dummy = np.full((48, 48, 3), 255, dtype=np.uint8)
             t0 = time.perf_counter()
-            self._run_engine_on_array(dummy)
+            engine.predict(dummy)
             elapsed = time.perf_counter() - t0
             logger.info("OCR warmup done in {:.2f}s.", elapsed)
         except Exception as e:
@@ -194,76 +166,60 @@ class OCRService:
         engine = self._load_engine()
         if engine is None:
             raise OCRError(
-                "OCR engine chưa sẵn sàng. Cài paddleocr + paddlepaddle và thử lại."
+                "OCR engine chưa sẵn sàng. Hãy kiểm tra cài đặt paddleocr + paddlepaddle-gpu."
             )
-        try:
-            from PIL import Image
-        except Exception as e:
-            raise OCRError("Thiếu Pillow để decode ảnh.") from e
-        try:
-            img = Image.open(io.BytesIO(data))
-            img.load()
-            if img.mode != "RGB":
-                img = img.convert("RGB")
-            img = self._downscale_if_needed(img)
-            arr = np.array(img)
-        except Exception as e:
-            logger.exception("Decode ảnh lỗi: {}", e)
-            raise OCRError("Không đọc được ảnh đầu vào.") from e
 
-        t0 = time.perf_counter()
-        text = self._run_engine_on_array(arr)
-        elapsed = time.perf_counter() - t0
-        logger.info(
-            "OCR ảnh xong: {}x{}, {} dòng, {:.2f}s.",
-            arr.shape[1],
-            arr.shape[0],
-            len(text.splitlines()) if text else 0,
-            elapsed,
-        )
-        return text
+        import tempfile
+        temp_path = None
+        try:
+            # Tạo file tạm trên ổ E:
+            with tempfile.NamedTemporaryFile(dir='E:\\AI_CACHE\\paddle_ocr\\temp', suffix='.png', delete=False) as tf:
+                tf.write(data)
+                temp_path = tf.name
+
+            t0 = time.perf_counter()
+            results = engine.predict(temp_path)
+            elapsed = time.perf_counter() - t0
+
+            texts = []
+            for res in results:
+                if res and hasattr(res, 'markdown') and isinstance(res.markdown, dict):
+                    page_text = res.markdown.get('markdown_texts', '')
+                    if page_text:
+                        texts.append(page_text)
+            text = "\n\n".join(texts)
+
+            logger.info(
+                "OCR ảnh xong: {} trang, {:.2f}s.",
+                len(results),
+                elapsed,
+            )
+            return text
+        except Exception as e:
+            logger.exception("OCR ảnh lỗi: {}", e)
+            raise OCRError("Không thể OCR ảnh này.") from e
+        finally:
+            if temp_path and os.path.exists(temp_path):
+                try:
+                     os.remove(temp_path)
+                except Exception:
+                     pass
 
     @staticmethod
     def _downscale_if_needed(img):
-        """Resize ảnh nếu cạnh dài vượt _MAX_IMAGE_LONG_EDGE.
-
-        OCR ảnh quá lớn không cải thiện chính xác (PaddleOCR tự resize về 960
-        ở tầng detection) nhưng tốn rất nhiều CPU cho việc decode/copy.
-        """
-        try:
-            from PIL import Image
-        except Exception:
-            return img
-        w, h = img.size
-        long_edge = max(w, h)
-        if long_edge <= _MAX_IMAGE_LONG_EDGE:
-            return img
-        ratio = _MAX_IMAGE_LONG_EDGE / float(long_edge)
-        new_w = max(1, int(w * ratio))
-        new_h = max(1, int(h * ratio))
-        try:
-            return img.resize((new_w, new_h), Image.LANCZOS)
-        except Exception:
-            return img
+        """Không cần resize thủ công vì PP-StructureV3 tự quản lý tỷ lệ phân tích tốt hơn."""
+        return img
 
     def _run_engine_on_array(self, arr: np.ndarray) -> str:
         engine = self._load_engine()
         if engine is None:
             raise OCRError("OCR engine chưa sẵn sàng.")
-
         try:
-            if self._engine_api == "predict":
-                output = engine.predict(arr)
-                return self._join_paddle_predict_output(output)
-            # PaddleOCR 2.x: ocr(img, cls=True)
-            try:
-                result = engine.ocr(arr, cls=True)
-            except TypeError:
-                # Một số bản 2.x mới đã bỏ cls kwarg.
-                result = engine.ocr(arr)
-            return self._join_paddle_v2_result(result)
+            results = engine.predict(arr)
+            texts = [res.markdown.get('markdown_texts', '') for res in results if res.markdown]
+            return "\n\n".join(texts)
         except Exception as e:
-            logger.exception("PaddleOCR error: {}", e)
+            logger.exception("PPStructureV3 error on array: {}", e)
             raise OCRError("Không thể OCR ảnh này.") from e
 
     def _extract_from_pdf(self, data: bytes) -> str:
@@ -296,102 +252,44 @@ class OCRService:
         engine = self._load_engine()
         if engine is None:
             raise OCRError(
-                "OCR engine chưa sẵn sàng. Cài paddleocr + paddlepaddle và thử lại."
+                "OCR engine chưa sẵn sàng. Hãy kiểm tra cài đặt paddleocr + paddlepaddle-gpu."
             )
+
+        import tempfile
+        temp_path = None
         try:
-            import pypdfium2 as pdfium  # type: ignore
+            # Tạo file tạm trên ổ E:
+            with tempfile.NamedTemporaryFile(dir='E:\\AI_CACHE\\paddle_ocr\\temp', suffix='.pdf', delete=False) as tf:
+                tf.write(data)
+                temp_path = tf.name
+
+            t0 = time.perf_counter()
+            results = engine.predict(temp_path)
+            elapsed = time.perf_counter() - t0
+
+            texts = []
+            for i, res in enumerate(results[:max_pages]):
+                if res and hasattr(res, 'markdown') and isinstance(res.markdown, dict):
+                    page_text = res.markdown.get('markdown_texts', '')
+                    if page_text:
+                        texts.append(f"[Trang {i + 1}]\n{page_text}")
+            text = "\n\n".join(texts)
+
+            logger.info(
+                "OCR PDF xong: {} trang, {:.2f}s.",
+                len(results),
+                elapsed,
+            )
+            return text
         except Exception as e:
-            logger.error("pypdfium2 chưa cài để render PDF scan: {}", e)
-            raise OCRError(
-                "Để OCR PDF dạng scan cần cài thêm pypdfium2."
-            ) from e
-
-        pdf = pdfium.PdfDocument(data)
-        total_pages = min(len(pdf), max_pages)
-        all_text: list[str] = []
-        try:
-            for i in range(total_pages):
-                page = pdf[i]
-                # 200 DPI = scale ~2.78 so với 72 DPI mặc định.
-                pil_image = page.render(scale=2.78).to_pil()
-                if pil_image.mode != "RGB":
-                    pil_image = pil_image.convert("RGB")
-                arr = np.array(pil_image)
-                try:
-                    page_text = self._run_engine_on_array(arr)
-                except OCRError as inner:
-                    logger.warning("Lỗi OCR trang {}: {}", i + 1, inner)
-                    page_text = ""
-                if page_text:
-                    all_text.append(f"[Trang {i + 1}]\n{page_text}")
+            logger.exception("OCR PDF lỗi: {}", e)
+            raise OCRError("Không thể OCR PDF này.") from e
         finally:
-            try:
-                pdf.close()
-            except Exception:
-                pass
-
-        return "\n\n".join(all_text)
-
-    @staticmethod
-    def _join_paddle_v2_result(result: Iterable | None) -> str:
-        """PaddleOCR 2.x: result = [[ [box, (text, score)], ... ]] (list per image)."""
-        if not result:
-            return ""
-        lines: list[str] = []
-        try:
-            # result là list theo từng ảnh. Mình truyền 1 ảnh nên lấy phần tử 0.
-            page_items = result[0] if result and isinstance(result, list) else result
-        except Exception:
-            page_items = result
-
-        if not page_items:
-            return ""
-        for item in page_items:
-            try:
-                # item = [box, (text, score)]
-                _, txt_pair = item[0], item[1]
-                if isinstance(txt_pair, (list, tuple)) and txt_pair:
-                    text = txt_pair[0]
-                else:
-                    text = txt_pair
-            except Exception:
-                continue
-            if isinstance(text, str) and text.strip():
-                lines.append(text.strip())
-        return "\n".join(lines)
-
-    @staticmethod
-    def _join_paddle_predict_output(output) -> str:
-        """PaddleOCR 3.x: output là list[OCRResult]; mỗi OCRResult có rec_texts."""
-        if not output:
-            return ""
-        lines: list[str] = []
-        try:
-            iterable = output if isinstance(output, list) else [output]
-        except Exception:
-            iterable = [output]
-
-        for res in iterable:
-            # Trường hợp dict-like (3.x kiểu object) hoặc dict thật
-            texts = None
-            if hasattr(res, "rec_texts"):
-                texts = getattr(res, "rec_texts", None)
-            elif isinstance(res, dict):
-                texts = res.get("rec_texts") or res.get("texts")
-            if not texts:
-                # Fallback: thử lấy json/dict
+            if temp_path and os.path.exists(temp_path):
                 try:
-                    d = res.json if hasattr(res, "json") else None
-                    if isinstance(d, dict):
-                        texts = d.get("rec_texts") or d.get("texts")
+                     os.remove(temp_path)
                 except Exception:
-                    pass
-            if not texts:
-                continue
-            for t in texts:
-                if isinstance(t, str) and t.strip():
-                    lines.append(t.strip())
-        return "\n".join(lines)
+                     pass
 
     @staticmethod
     def _postprocess(text: str) -> str:
@@ -404,3 +302,4 @@ class OCRService:
 
 
 ocr_service = OCRService()
+

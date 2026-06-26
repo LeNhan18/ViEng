@@ -1,3 +1,5 @@
+--extra-index-url https://www.paddlepaddle.org.cn/packages/stable/cu118/
+
 # Web framework
 fastapi>=0.115.0
 uvicorn[standard]>=0.32.0
@@ -39,12 +41,9 @@ loguru>=0.7.2
 # TTS (phát âm)
 edge-tts>=6.1.0
 
-# OCR (chat with image/PDF) - PaddleOCR (CPU)
-# Pin paddlepaddle 2.x (model PaddleOCR 2.x export không tương thích Paddle 3.x oneDNN).
-# Pin albumentations <2 vì 2.x bắt cài torch (không cần cho inference).
-paddleocr>=2.7.0,<3.0.0
-paddlepaddle>=2.6.0,<3.0.0
-albumentations<2.0
+# OCR (chat with image/PDF) - PP-OCRv6 Pipeline (PP-StructureV3) chạy GPU
+paddleocr>=3.0.0b2
+paddlepaddle-gpu==3.0.0
 pypdfium2>=4.30.0
 Pillow>=10.4.0
 
