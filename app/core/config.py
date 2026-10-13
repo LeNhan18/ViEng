@@ -19,6 +19,15 @@ class Settings(BaseSettings):
     # - "auto": ưu tiên OpenRouter -> Groq -> OpenAI; nếu USE_FINETUNED_MODEL=true thì dùng HF (local hoặc inference)
     # - "openrouter" | "groq" | "openai" | "hf_inference" | "hf_local"
     llm_provider: str = "auto"
+    # Model OpenRouter mặc định cho mọi tác vụ.
+    llm_model: str = "openai/gpt-4o-mini"
+    # Số lần cho LLM tự sửa khi output sai schema/nghiệp vụ.
+    llm_max_repairs: int = 2
+
+    # Observability (tuỳ chọn): Langfuse tracing
+    langfuse_public_key: str = ""
+    langfuse_secret_key: str = ""
+    langfuse_host: str = ""
 
     chroma_persist_dir: str = "./data/vectorstore"
     embedding_model: str = "sentence-transformers/models--BAAI--bge-m3"

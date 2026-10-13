@@ -23,6 +23,8 @@ from app.models.orm import User
 from app.services.llm_service import llm_service
 from app.services.ocr_service import OCRError, ocr_service
 from app.services.rag_service import rag_service
+from app.services.structured import StructuredOutputError
+from app.core.observability import stats as obs_stats
 from app.services.chat_memory_service import chat_memory_service
 from app.services.auth_service import (
     create_access_token,
@@ -51,6 +53,12 @@ def _clean_json(raw: str) -> str:
 @router.get("/health")
 async def health_check():
     return {"status": "ok", "message": "ViEng API is running"}
+
+
+@router.get("/metrics")
+async def metrics():
+    """Latency p50/p95, tỉ lệ lỗi, token, số lần tự sửa theo task LLM và theo route HTTP."""
+    return obs_stats.snapshot()
 
 
 _bearer = HTTPBearer(auto_error=False)
@@ -157,8 +165,8 @@ async def generate_test(request: TestRequest):
             llm_provider=request.llm_provider,
         )
 
-        raw_cleaned = _clean_json(raw)
-        data = json.loads(raw_cleaned)
+        # generate_questions trả về dữ liệu đã validate; vẫn chấp nhận chuỗi JSON (tương thích cũ).
+        data = json.loads(_clean_json(raw)) if isinstance(raw, str) else raw
 
         if is_toeic_reading and request.part == ToeicReadingPart.PART5:
             questions = [Question(**q) for q in data]
@@ -225,8 +233,11 @@ async def generate_test(request: TestRequest):
             questions=questions,
         )
 
+    except StructuredOutputError as e:
+        logger.error("LLM output invalid after repairs: {}", e.errors[:5])
+        raise HTTPException(status_code=502, detail="LLM trả về dữ liệu không hợp lệ. Vui lòng thử lại.")
     except json.JSONDecodeError:
-        logger.error(f"LLM returned invalid JSON: {raw[:200]}")
+        logger.error("LLM returned invalid JSON")
         raise HTTPException(status_code=502, detail="LLM trả về dữ liệu không hợp lệ. Vui lòng thử lại.")
     except Exception as e:
         logger.exception("Error generating test: {}", e)
@@ -413,7 +424,7 @@ async def chat(
 
     except Exception as e:
         logger.exception("Error in chat: {}", e)
-        raise HTTPException(status_code=500, detail=f"DEBUG ERROR: {str(e)}")
+        raise HTTPException(status_code=500, detail=_INTERNAL_ERROR)
 
 
 _OCR_USER_PROMPT_TEMPLATE = (

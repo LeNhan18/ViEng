@@ -1,8 +1,28 @@
-from openai import AsyncOpenAI
-from groq import AsyncGroq
+import json
+
+from pydantic import BaseModel, ValidationError
+
 from app.core.config import get_settings
 from app.models.schemas import Skill, Level, ExamType, ToeicReadingPart
 from app.services.rag_service import rag_service
+from app.core.observability import llm_span, make_async_openai_client
+from app.services.structured import (
+    Part6Set,
+    Part7Set,
+    QuestionSet,
+    StructuredOutputError,
+    TranslationResult,
+    coerce_to_schema,
+    extract_json,
+    format_validation_error,
+    to_part6,
+    to_part7,
+    to_questions,
+    validate_part6,
+    validate_part7,
+    validate_question_set,
+    validate_translation,
+)
 from loguru import logger
 import random
 
@@ -57,10 +77,14 @@ class LLMService:
                 f"Sẽ dùng fine-tuned model: {settings.hf_model_name} (provider={settings.llm_provider})"
             )
         if settings.openrouter_api_key:
-            self._openrouter_client = AsyncOpenAI(
+            self._openrouter_client = make_async_openai_client(
                 base_url="https://openrouter.ai/api/v1",
                 api_key=settings.openrouter_api_key,
+                timeout=60.0,
+                max_retries=2,
             )
+        # Tắt structured outputs nếu provider/model không hỗ trợ (tự phát hiện).
+        self._structured_supported = True
 
     def _provider(self, override: str | None = None) -> str:
         settings = get_settings()
@@ -164,7 +188,7 @@ class LLMService:
     @property
     def _client_and_model(self) -> tuple:
         if self._openrouter_client:
-            return self._openrouter_client, "openai/gpt-4o-mini"
+            return self._openrouter_client, get_settings().llm_model
         raise RuntimeError(
             "Chưa cấu hình API key. Thêm OPENROUTER_API_KEY vào .env"
         )
@@ -322,31 +346,148 @@ class LLMService:
         *,
         provider_override: str | None = None,
         temperature: float | None = None,
+        task: str = "generic",
     ) -> str:
         sys_content = system_msg or SYSTEM_PROMPT
         temp = temperature if temperature is not None else round(random.uniform(0.75, 0.9), 2)
-        logger.info(f"Using temperature = {temp} for question/response generation")
-        
-        if self._use_finetuned:
-            return await self._call_finetuned(
-                prompt, max_tokens=max_tokens, system_msg=sys_content, provider_override=provider_override, temperature=temp
-            )
 
-        provider = self._provider(provider_override)
-        if provider == "openrouter" and self._openrouter_client:
-            client, model = self._openrouter_client, "openai/gpt-4o-mini"
-        else:
-            client, model = self._client_and_model
-        response = await client.chat.completions.create(
-            model=model,
-            messages=[
-                {"role": "system", "content": sys_content},
-                {"role": "user", "content": prompt},
-            ],
-            temperature=temp,
-            max_tokens=max_tokens,
+        if self._use_finetuned:
+            async with llm_span(task, get_settings().hf_model_name):
+                return await self._call_finetuned(
+                    prompt, max_tokens=max_tokens, system_msg=sys_content,
+                    provider_override=provider_override, temperature=temp,
+                )
+
+        client, model = self._client_and_model
+        async with llm_span(task, model) as span:
+            response = await client.chat.completions.create(
+                model=model,
+                messages=[
+                    {"role": "system", "content": sys_content},
+                    {"role": "user", "content": prompt},
+                ],
+                temperature=temp,
+                max_tokens=max_tokens,
+            )
+            span.add_usage(getattr(response, "usage", None))
+            return response.choices[0].message.content
+
+    # ------------------------------------------------------------------
+    # Structured outputs + validate + self-repair
+    # ------------------------------------------------------------------
+    @staticmethod
+    def _parse_method(client):
+        """openai>=1.92 có chat.completions.parse; bản cũ nằm ở beta."""
+        comp = getattr(getattr(client, "chat", None), "completions", None)
+        if comp is not None and hasattr(comp, "parse"):
+            return comp.parse
+        beta = getattr(client, "beta", None)
+        if beta is not None:
+            return beta.chat.completions.parse
+        return None
+
+    async def _structured_attempt(
+        self, messages: list[dict], schema: type[BaseModel], *, max_tokens: int,
+        temperature: float, provider_override: str | None, span,
+    ) -> tuple[BaseModel | None, str, list[str]]:
+        """1 lần gọi. Trả về (object|None, raw_text, schema_errors)."""
+        if self._use_finetuned:
+            prompt = "\n\n".join(m["content"] for m in messages[1:])
+            raw = await self._call_finetuned(
+                prompt, max_tokens=max_tokens, system_msg=messages[0]["content"],
+                provider_override=provider_override, temperature=temperature,
+            )
+            return self._parse_raw(raw, schema)
+
+        client, model = self._client_and_model
+        parse = self._parse_method(client) if self._structured_supported else None
+        if parse is not None:
+            try:
+                resp = await parse(
+                    model=model, messages=messages, response_format=schema,
+                    temperature=temperature, max_tokens=max_tokens,
+                )
+                span.add_usage(getattr(resp, "usage", None))
+                msg = resp.choices[0].message
+                raw = msg.content or ""
+                if getattr(msg, "parsed", None) is not None:
+                    return msg.parsed, raw, []
+                if getattr(msg, "refusal", None):
+                    return None, raw, [f"Model từ chối: {msg.refusal}"]
+                return self._parse_raw(raw, schema)
+            except ValidationError as e:
+                return None, "", format_validation_error(e)
+            except Exception as e:  # noqa: BLE001
+                # Provider/model không hỗ trợ json_schema -> chuyển hẳn sang text mode.
+                if e.__class__.__name__ in ("BadRequestError", "UnprocessableEntityError", "NotFoundError"):
+                    logger.warning("Structured outputs không được hỗ trợ ({}); dùng JSON text mode.", e)
+                    self._structured_supported = False
+                else:
+                    raise
+
+        resp = await client.chat.completions.create(
+            model=model, messages=messages, temperature=temperature, max_tokens=max_tokens,
         )
-        return response.choices[0].message.content
+        span.add_usage(getattr(resp, "usage", None))
+        return self._parse_raw(resp.choices[0].message.content or "", schema)
+
+    @staticmethod
+    def _parse_raw(raw: str, schema: type[BaseModel]) -> tuple[BaseModel | None, str, list[str]]:
+        try:
+            return coerce_to_schema(extract_json(raw), schema), raw, []
+        except ValidationError as e:
+            return None, raw, format_validation_error(e)
+        except (ValueError, json.JSONDecodeError) as e:
+            return None, raw, [f"JSON không hợp lệ: {e}"]
+
+    async def _generate_structured(
+        self,
+        prompt: str,
+        schema: type[BaseModel],
+        validator,
+        *,
+        task: str,
+        max_tokens: int = 2000,
+        temperature: float = 0.7,
+        system_msg: str = "",
+        provider_override: str | None = None,
+    ) -> BaseModel:
+        """Gọi LLM -> parse theo schema -> validate nghiệp vụ -> cho LLM tự sửa nếu lỗi."""
+        settings = get_settings()
+        messages = [
+            {"role": "system", "content": system_msg or SYSTEM_PROMPT},
+            {"role": "user", "content": prompt},
+        ]
+        model = settings.hf_model_name if self._use_finetuned else get_settings().llm_model
+        errors: list[str] = []
+        async with llm_span(task, model) as span:
+            for attempt in range(settings.llm_max_repairs + 1):
+                obj, raw, errors = await self._structured_attempt(
+                    messages, schema, max_tokens=max_tokens, temperature=temperature,
+                    provider_override=provider_override, span=span,
+                )
+                if obj is not None and not errors:
+                    errors = validator(obj)
+                if not errors:
+                    return obj
+                logger.warning("[{}] output lỗi (lần {}): {}", task, attempt + 1, errors[:5])
+                if attempt == settings.llm_max_repairs:
+                    break
+                span.repairs += 1
+                previous = raw or (obj.model_dump_json() if obj is not None else "")
+                if previous:
+                    messages.append({"role": "assistant", "content": previous[:12000]})
+                messages.append({
+                    "role": "user",
+                    "content": (
+                        "Output vừa rồi chưa đạt yêu cầu:\n- " + "\n- ".join(errors[:10])
+                        + "\nHãy sửa các lỗi trên và trả lại TOÀN BỘ kết quả theo đúng JSON schema. "
+                        "Chỉ trả về JSON."
+                    ),
+                })
+                # Giảm nhiệt độ khi sửa để model bám yêu cầu hơn.
+                temperature = min(temperature, 0.4)
+            raise StructuredOutputError(f"[{task}] LLM không trả về output hợp lệ.", errors)
 
     async def generate_questions(
         self,
@@ -357,43 +498,58 @@ class LLMService:
         part: ToeicReadingPart | None = None,
         *,
         llm_provider: str | None = None,
-    ) -> str:
+    ) -> list[dict]:
+        """Sinh đề đã được validate. Trả về list dict theo shape API cũ (có id liên tục)."""
+        import asyncio
+
         logger.info(f"Generating questions: {exam_type}/{skill}/{level} part={part} n={num_questions}")
 
         selected_grammar = random.choice(GRAMMAR_TOPICS)
         selected_business = random.choice(BUSINESS_TOPICS)
-        logger.info(f"Selected random grammar topic: {selected_grammar}")
-        logger.info(f"Selected random business topic: {selected_business}")
+        logger.info(f"Topics: grammar={selected_grammar!r} business={selected_business!r}")
 
         random_temp = round(random.uniform(0.75, 0.9), 2)
+        common = dict(temperature=random_temp, provider_override=llm_provider)
 
         if exam_type == ExamType.TOEIC and skill == Skill.READING and part:
             extra_query = f"{selected_grammar} {selected_business}"
-            rag_context = self._retrieve_for_part(part.value, level, extra_query)
+            rag_context = await asyncio.to_thread(self._retrieve_for_part, part.value, level, extra_query)
             if rag_context:
                 logger.info(f"RAG context retrieved for {part.value} ({len(rag_context)} chars)")
 
             if part == ToeicReadingPart.PART5:
                 prompt = self._build_part5_prompt(level, num_questions, rag_context, selected_grammar, selected_business)
-                return await self._call_llm(prompt, max_tokens=2000, provider_override=llm_provider, temperature=random_temp)
+                obj = await self._generate_structured(
+                    prompt, QuestionSet,
+                    lambda o: validate_question_set(o, num_questions, require_blank=True),
+                    task="generate_part5", max_tokens=2000, **common,
+                )
+                return [q.model_dump() for q in to_questions(obj, num_questions)]
 
-            elif part == ToeicReadingPart.PART6:
+            if part == ToeicReadingPart.PART6:
                 num_passages = max(1, num_questions // 4)
                 prompt = self._build_part6_prompt(level, num_passages, rag_context, selected_grammar, selected_business)
-                return await self._call_llm(prompt, max_tokens=3000, provider_override=llm_provider, temperature=random_temp)
+                obj = await self._generate_structured(
+                    prompt, Part6Set, lambda o: validate_part6(o, num_passages),
+                    task="generate_part6", max_tokens=3000, **common,
+                )
+                return [p.model_dump() for p in to_part6(obj, num_passages)]
 
-            elif part == ToeicReadingPart.PART7_SINGLE:
-                num_passages = max(1, num_questions // 3)
-                prompt = self._build_part7_single_prompt(level, num_passages, rag_context, selected_grammar, selected_business)
-                return await self._call_llm(prompt, max_tokens=4000, provider_override=llm_provider, temperature=random_temp)
+            if part in (ToeicReadingPart.PART7_SINGLE, ToeicReadingPart.PART7_MULTIPLE):
+                multiple = part == ToeicReadingPart.PART7_MULTIPLE
+                n = max(1, num_questions // (5 if multiple else 3))
+                build = self._build_part7_multiple_prompt if multiple else self._build_part7_single_prompt
+                prompt = build(level, n, rag_context, selected_grammar, selected_business)
+                obj = await self._generate_structured(
+                    prompt, Part7Set, lambda o: validate_part7(o, n, multiple=multiple),
+                    task=f"generate_{part.value}", max_tokens=4000, **common,
+                )
+                return [p.model_dump() for p in to_part7(obj, n)]
 
-            elif part == ToeicReadingPart.PART7_MULTIPLE:
-                num_sets = max(1, num_questions // 5)
-                prompt = self._build_part7_multiple_prompt(level, num_sets, rag_context, selected_grammar, selected_business)
-                return await self._call_llm(prompt, max_tokens=4000, provider_override=llm_provider, temperature=random_temp)
-
-        rag_context = rag_service.retrieve_mmr(
-            f"{exam_type.value} grammar vocabulary {skill.value} {level.value} {selected_grammar} {selected_business}", k=2,
+        rag_context = await asyncio.to_thread(
+            rag_service.retrieve_mmr,
+            f"{exam_type.value} grammar vocabulary {skill.value} {level.value} {selected_grammar} {selected_business}",
+            2,
         )
         rag_section = self._build_rag_context_section(rag_context)
 
@@ -403,15 +559,20 @@ class LLMService:
             f"Chủ đề ngữ pháp cần tập trung: {selected_grammar}.\n"
             f"Bối cảnh câu hỏi: {selected_business}.\n\n"
             f"Yêu cầu:\n"
-            f"- Mỗi câu hỏi có 4 đáp án A, B, C, D (nếu là reading/listening)\n"
+            f"- Mỗi câu hỏi có đúng 4 đáp án A, B, C, D\n"
             f"- Đánh dấu đáp án đúng\n"
             f"- Nội dung sát format thi {exam_type.value.upper()} thật\n"
             f"{rag_section}\n"
-            f"- Trả về JSON array với format:\n"
-            f'  [{{"id": 1, "content": "...", "options": ["A. ...", "B. ...", "C. ...", "D. ..."], "correct_answer": "A"}}]\n'
+            f"- Trả về JSON với format:\n"
+            f'  {{"questions": [{{"content": "...", "options": ["A. ...", "B. ...", "C. ...", "D. ..."], "correct_answer": "A"}}]}}\n'
             f"- Chỉ trả về JSON, không thêm text khác."
         )
-        return await self._call_llm(prompt, provider_override=llm_provider, temperature=random_temp)
+        obj = await self._generate_structured(
+            prompt, QuestionSet,
+            lambda o: validate_question_set(o, num_questions, require_blank=False),
+            task=f"generate_{exam_type.value}_{skill.value}", **common,
+        )
+        return [q.model_dump() for q in to_questions(obj, num_questions)]
 
     def _part_explanation_guidance(self, part: str | None) -> str:
         """Hướng dẫn giải thích khác nhau theo Part 5/6/7."""
@@ -476,7 +637,8 @@ class LLMService:
             "Khi được cung cấp tài liệu tham khảo, hãy dựa vào đó để giải thích chính xác hơn."
         )
         return await self._call_llm(
-            prompt, max_tokens=1000, system_msg=explain_system, provider_override=llm_provider
+            prompt, max_tokens=1000, system_msg=explain_system, provider_override=llm_provider,
+            temperature=0.3, task="explain_answer",
         )
 
 
@@ -523,20 +685,20 @@ class LLMService:
             "- Chỉ trả về JSON, không thêm text."
         )
 
-        raw = await self._call_llm(prompt, max_tokens=2000, provider_override=llm_provider)
-
         try:
-            cleaned = raw.strip()
-            if cleaned.startswith("```"):
-                cleaned = cleaned.split("\n", 1)[1].rsplit("```", 1)[0]
-            import json
-            return json.loads(cleaned)
-        except Exception:
-            return {
-                "translated": raw,
-                "vocabulary": [],
-                "grammar_notes": [],
-            }
+            obj = await self._generate_structured(
+                prompt, TranslationResult, validate_translation,
+                task="translate", max_tokens=2000, temperature=0.3,
+                provider_override=llm_provider,
+            )
+            return obj.model_dump()
+        except StructuredOutputError as e:
+            logger.warning("Translate structured output failed: {}", e.errors[:3])
+            raw = await self._call_llm(
+                prompt, max_tokens=2000, provider_override=llm_provider,
+                temperature=0.3, task="translate_fallback",
+            )
+            return {"translated": raw, "vocabulary": [], "grammar_notes": []}
 
     async def chat(
         self,
@@ -566,22 +728,21 @@ class LLMService:
                 f"{'User' if m['role']=='user' else 'Assistant'}: {m['content']}"
                 for m in messages[1:]
             )
-            return await self._call_finetuned(
-                prompt, max_tokens=1500, system_msg=system_content, provider_override=llm_provider
-            )
+            async with llm_span("chat", get_settings().hf_model_name):
+                return await self._call_finetuned(
+                    prompt, max_tokens=1500, system_msg=system_content, provider_override=llm_provider
+                )
 
-        provider = self._provider(llm_provider)
-        if provider == "openrouter" and self._openrouter_client:
-            client, model = self._openrouter_client, "openai/gpt-4o-mini"
-        else:
-            client, model = self._client_and_model
-        response = await client.chat.completions.create(
-            model=model,
-            messages=messages,
-            temperature=0.7,
-            max_tokens=1500,
-        )
-        return response.choices[0].message.content
+        client, model = self._client_and_model
+        async with llm_span("chat", model) as span:
+            response = await client.chat.completions.create(
+                model=model,
+                messages=messages,
+                temperature=0.7,
+                max_tokens=1500,
+            )
+            span.add_usage(getattr(response, "usage", None))
+            return response.choices[0].message.content
 
 
 llm_service = LLMService()
