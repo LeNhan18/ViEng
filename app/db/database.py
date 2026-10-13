@@ -19,6 +19,8 @@ class Base(DeclarativeBase):
 
 def _get_db_url() -> str:
     s = get_settings()
+    if s.database_url:
+        return s.database_url
     return (
         f"mysql+aiomysql://{s.db_user}:{s.db_password}"
         f"@{s.db_host}:{s.db_port}/{s.db_name}?charset=utf8mb4"
@@ -28,6 +30,9 @@ def _get_db_url() -> str:
 def _create_engine() -> AsyncEngine:
     s = get_settings()
     url = _get_db_url()
+    if url.startswith("sqlite"):
+        logger.info("DB engine: {}", url)
+        return create_async_engine(url, echo=False)
     logger.info(f"DB engine: mysql+aiomysql://{s.db_user}:***@{s.db_host}:{s.db_port}/{s.db_name}")
     return create_async_engine(
         url,

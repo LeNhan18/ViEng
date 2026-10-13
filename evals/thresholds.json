@@ -1,0 +1,13 @@
+{
+  "solver_baseline": {"accuracy": {"min": 0.9}},
+  "generation": {
+    "generation_success_rate": {"min": 0.95},
+    "repair_rate": {"max": 0.5},
+    "solver_agreement": {"min": 0.85}
+  },
+  "explain": {"pass_rate": {"min": 0.85}},
+  "chat": {
+    "key_point_coverage": {"min": 0.8},
+    "answers_with_errors_rate": {"max": 0.1}
+  }
+}

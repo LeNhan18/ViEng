@@ -1,0 +1,66 @@
+name: LLM Eval
+
+# Chạy eval chất lượng với LLM thật. Cần secret OPENROUTER_API_KEY.
+# Tuỳ chọn: biến repo EVAL_SOLVER_MODEL / EVAL_JUDGE_MODEL (nên khác họ với LLM_MODEL).
+on:
+  pull_request:
+    paths:
+      - "app/services/**"
+      - "app/core/config.py"
+      - "evals/**"
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: "quick hoặc full"
+        default: "full"
+      suite:
+        description: "all hoặc solver_baseline,generation,explain,chat"
+        default: "all"
+  schedule:
+    - cron: "0 1 * * 1"  # thứ Hai 08:00 giờ VN
+
+concurrency:
+  group: eval-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  eval:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+      LLM_MODEL: ${{ vars.LLM_MODEL || 'openai/gpt-4o-mini' }}
+      EVAL_SOLVER_MODEL: ${{ vars.EVAL_SOLVER_MODEL }}
+      EVAL_JUDGE_MODEL: ${{ vars.EVAL_JUDGE_MODEL }}
+      RAG_ENABLED: "false"
+      OCR_ENABLED: "false"
+    steps:
+      - name: Skip when no API key
+        if: env.OPENROUTER_API_KEY == ''
+        run: echo "::notice::OPENROUTER_API_KEY chưa được cấu hình - bỏ qua eval."
+      - uses: actions/checkout@v4
+        if: env.OPENROUTER_API_KEY != ''
+      - uses: actions/setup-python@v5
+        if: env.OPENROUTER_API_KEY != ''
+        with:
+          python-version: "3.11"
+          cache: "pip"
+          cache-dependency-path: |
+            requirements.lite.txt
+            requirements-dev.txt
+      - name: Install deps
+        if: env.OPENROUTER_API_KEY != ''
+        run: pip install -r requirements.lite.txt -r requirements-dev.txt
+      - name: Run eval
+        if: env.OPENROUTER_API_KEY != ''
+        run: |
+          MODE="${{ github.event.inputs.mode || (github.event_name == 'pull_request' && 'quick' || 'full') }}"
+          SUITE="${{ github.event.inputs.suite || 'all' }}"
+          FLAG=""; [ "$MODE" = "quick" ] && FLAG="--quick"
+          python -m evals.run --suite "$SUITE" $FLAG
+      - name: Upload report
+        if: always() && env.OPENROUTER_API_KEY != ''
+        uses: actions/upload-artifact@v4
+        with:
+          name: eval-report
+          path: evals/reports/latest.json

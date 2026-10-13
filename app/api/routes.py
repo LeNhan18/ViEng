@@ -20,9 +20,11 @@ from app.models.schemas import (
 )
 from app.db.database import get_db
 from app.models.orm import User
-from app.services.llm_service import llm_service
+from app.services.llm_service import LLMNotConfiguredError, llm_service
 from app.services.ocr_service import OCRError, ocr_service
 from app.services.rag_service import rag_service
+from app.services.structured import StructuredOutputError
+from app.core.observability import stats as obs_stats
 from app.services.chat_memory_service import chat_memory_service
 from app.services.auth_service import (
     create_access_token,
@@ -51,6 +53,12 @@ def _clean_json(raw: str) -> str:
 @router.get("/health")
 async def health_check():
     return {"status": "ok", "message": "ViEng API is running"}
+
+
+@router.get("/metrics")
+async def metrics():
+    """Latency p50/p95, tỉ lệ lỗi, token, số lần tự sửa theo task LLM và theo route HTTP."""
+    return obs_stats.snapshot()
 
 
 _bearer = HTTPBearer(auto_error=False)
@@ -157,8 +165,8 @@ async def generate_test(request: TestRequest):
             llm_provider=request.llm_provider,
         )
 
-        raw_cleaned = _clean_json(raw)
-        data = json.loads(raw_cleaned)
+        # generate_questions trả về dữ liệu đã validate; vẫn chấp nhận chuỗi JSON (tương thích cũ).
+        data = json.loads(_clean_json(raw)) if isinstance(raw, str) else raw
 
         if is_toeic_reading and request.part == ToeicReadingPart.PART5:
             questions = [Question(**q) for q in data]
@@ -225,9 +233,14 @@ async def generate_test(request: TestRequest):
             questions=questions,
         )
 
-    except json.JSONDecodeError:
-        logger.error(f"LLM returned invalid JSON: {raw[:200]}")
+    except StructuredOutputError as e:
+        logger.error("LLM output invalid after repairs: {}", e.errors[:5])
         raise HTTPException(status_code=502, detail="LLM trả về dữ liệu không hợp lệ. Vui lòng thử lại.")
+    except json.JSONDecodeError:
+        logger.error("LLM returned invalid JSON")
+        raise HTTPException(status_code=502, detail="LLM trả về dữ liệu không hợp lệ. Vui lòng thử lại.")
+    except LLMNotConfiguredError:
+        raise
     except Exception as e:
         logger.exception("Error generating test: {}", e)
         raise HTTPException(status_code=500, detail=_INTERNAL_ERROR)
@@ -237,52 +250,46 @@ async def generate_test(request: TestRequest):
 async def submit_answers(request: SubmitRequest):
     """Chấm bài và trả về feedback chi tiết với giải thích kiểu 'thầy cô Việt'."""
     try:
-        feedbacks = []
-        correct_count = 0
-
+        import asyncio
         part_value = request.part.value if request.part else None
+        sem = asyncio.Semaphore(5)
 
-        for answer in request.answers:
+        async def _one(answer):
             is_correct = (
                 answer.user_answer == answer.correct_answer
                 or answer.user_answer.startswith(answer.correct_answer)
             )
-            if is_correct:
-                correct_count += 1
-
             question_text = answer.question_content or f"Câu {answer.question_id}"
             options_text = ", ".join(answer.options) if answer.options else ""
-
             rag_query = f"{question_text} {options_text}"
             if answer.passage:
                 rag_query = f"{answer.passage[:300]} {rag_query}"
-            context = rag_service.retrieve(rag_query, k=3)
-
-            explanation = await llm_service.explain_answer(
-                question=f"{question_text}\nĐáp án: {options_text}" if options_text else question_text,
-                user_answer=answer.user_answer,
-                correct_answer=answer.correct_answer,
-                context=context,
-                part=part_value,
-                passage=answer.passage or "",
-            )
-
-            sources = []
-            if context:
-                sources = [
-                    line.replace("[Nguồn: ", "").replace("]", "")
-                    for line in context.split("\n")
-                    if line.startswith("[Nguồn:")
-                ]
-
-            feedbacks.append(Feedback(
+            async with sem:
+                context = await run_in_threadpool(rag_service.retrieve, rag_query, 3)
+                explanation = await llm_service.explain_answer(
+                    question=f"{question_text}\nĐáp án: {options_text}" if options_text else question_text,
+                    user_answer=answer.user_answer,
+                    correct_answer=answer.correct_answer,
+                    context=context,
+                    part=part_value,
+                    passage=answer.passage or "",
+                )
+            sources = [
+                line.replace("[Nguồn: ", "").replace("]", "")
+                for line in (context or "").split("\n")
+                if line.startswith("[Nguồn:")
+            ]
+            return Feedback(
                 question_id=answer.question_id,
                 is_correct=is_correct,
                 user_answer=answer.user_answer,
                 correct_answer=answer.correct_answer,
                 explanation=explanation,
                 sources=sources,
-            ))
+            )
+
+        feedbacks = await asyncio.gather(*(_one(a) for a in request.answers))
+        correct_count = sum(1 for f in feedbacks if f.is_correct)
 
         total = len(request.answers)
         return SubmitResponse(
@@ -291,6 +298,8 @@ async def submit_answers(request: SubmitRequest):
             percentage=round(correct_count / total * 100, 1) if total > 0 else 0,
             feedbacks=feedbacks,
         )
+    except LLMNotConfiguredError:
+        raise
     except Exception as e:
         logger.exception("Error submitting answers: {}", e)
         raise HTTPException(status_code=500, detail=_INTERNAL_ERROR)
@@ -311,6 +320,8 @@ async def text_to_speech(text: str = Body(..., embed=True, min_length=1, max_len
             media_type="audio/mpeg",
             headers={"Content-Disposition": "inline; filename=speech.mp3"},
         )
+    except LLMNotConfiguredError:
+        raise
     except Exception as e:
         logger.exception("TTS error: {}", e)
         raise HTTPException(status_code=500, detail="Không thể tạo audio. Vui lòng thử lại.")
@@ -343,6 +354,8 @@ async def translate_text(request: TranslateRequest):
             grammar_notes=result.get("grammar_notes", []),
             rag_context=rag_context[:500] if rag_context else "",
         )
+    except LLMNotConfiguredError:
+        raise
     except Exception as e:
         logger.exception("Error translating: {}", e)
         raise HTTPException(status_code=500, detail=_INTERNAL_ERROR)
@@ -417,9 +430,11 @@ async def chat(
             if db_context:
                 await db_context.__aexit__(None, None, None)
 
+    except LLMNotConfiguredError:
+        raise
     except Exception as e:
         logger.exception("Error in chat: {}", e)
-        raise HTTPException(status_code=500, detail=f"DEBUG ERROR: {str(e)}")
+        raise HTTPException(status_code=500, detail=_INTERNAL_ERROR)
 
 
 _OCR_USER_PROMPT_TEMPLATE = (
@@ -446,6 +461,8 @@ async def chat_with_ocr(
 
     try:
         data = await file.read()
+    except LLMNotConfiguredError:
+        raise
     except Exception as e:
         logger.exception("Error reading uploaded file: {}", e)
         raise HTTPException(status_code=400, detail="Không đọc được file tải lên.")
@@ -551,6 +568,8 @@ async def chat_with_ocr(
             extracted_text=extracted,
             file_name=file.filename or "",
         )
+    except LLMNotConfiguredError:
+        raise
     except Exception as e:
         logger.exception("Error in chat_with_ocr LLM stage: {}", e)
         raise HTTPException(status_code=500, detail=_INTERNAL_ERROR)
@@ -563,6 +582,8 @@ async def ocr_only(file: UploadFile = File(...)):
         raise HTTPException(status_code=503, detail="Tính năng OCR đang bị tắt.")
     try:
         data = await file.read()
+    except LLMNotConfiguredError:
+        raise
     except Exception as e:
         logger.exception("Error reading uploaded file: {}", e)
         raise HTTPException(status_code=400, detail="Không đọc được file tải lên.")
@@ -625,6 +646,8 @@ async def list_vectorstore(limit: int = 20, offset: int = 0):
                 "length": len(d),
             })
         return {"chunks": chunks, "total": total, "limit": limit, "offset": offset}
+    except LLMNotConfiguredError:
+        raise
     except Exception as e:
         logger.exception("Error listing vectorstore: {}", e)
         raise HTTPException(status_code=500, detail=_INTERNAL_ERROR)
@@ -666,6 +689,8 @@ async def get_chat_history(
         finally:
             if db_context:
                 await db_context.__aexit__(None, None, None)
+    except LLMNotConfiguredError:
+        raise
     except Exception as e:
         logger.exception("Error in get_chat_history: {}", e)
         raise HTTPException(status_code=500, detail=_INTERNAL_ERROR)
@@ -691,6 +716,8 @@ async def delete_chat_history(
         finally:
             if db_context:
                 await db_context.__aexit__(None, None, None)
+    except LLMNotConfiguredError:
+        raise
     except Exception as e:
         logger.exception("Error in delete_chat_history: {}", e)
         raise HTTPException(status_code=500, detail=_INTERNAL_ERROR)

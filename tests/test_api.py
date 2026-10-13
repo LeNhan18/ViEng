@@ -90,3 +90,17 @@ def test_db_status_when_disabled(client):
     """USE_DATABASE defaults false — expect 503 from dependency."""
     response = client.get("/api/v1/db/status")
     assert response.status_code == 503
+
+
+def test_generate_returns_503_when_llm_not_configured(client, monkeypatch):
+    import app.services.llm_service as llm_mod
+
+    monkeypatch.setattr(llm_mod.llm_service, "_openrouter_client", None)
+    monkeypatch.setattr(type(llm_mod.llm_service), "_use_finetuned", property(lambda self: False))
+    response = client.post(
+        "/api/v1/test/generate",
+        json={"exam_type": "toeic", "skill": "reading", "level": "intermediate",
+              "num_questions": 1, "part": "part5"},
+    )
+    assert response.status_code == 503
+    assert "chưa được cấu hình" in response.json()["detail"]

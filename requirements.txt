@@ -35,8 +35,9 @@ streamlit>=1.40.0
 pytest>=8.3.3
 pytest-asyncio>=0.24.0
 
-# Logging
+# Logging / observability
 loguru>=0.7.2
+# langfuse>=2.50  # tuỳ chọn: bật trace khi đặt LANGFUSE_* trong .env
 
 # TTS (phát âm)
 edge-tts>=6.1.0
@@ -58,3 +59,5 @@ PyJWT>=2.9.0
 
 # Redis memory
 redis>=5.0.0
+
+python-multipart>=0.0.9

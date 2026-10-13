@@ -13,6 +13,7 @@ from starlette.responses import JSONResponse
 
 from app.api.routes import router
 from app.core.config import get_settings
+from app.core.observability import stats as obs_stats
 from app.db.database import init_db
 
 settings = get_settings()
@@ -106,7 +107,31 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
+class TimingMiddleware(BaseHTTPMiddleware):
+    """Đo thời gian xử lý mỗi request: header X-Process-Time-ms + thống kê theo route."""
+
+    async def dispatch(self, request: Request, call_next):
+        import time
+
+        t0 = time.perf_counter()
+        response = None
+        try:
+            response = await call_next(request)
+            return response
+        finally:
+            ms = (time.perf_counter() - t0) * 1000
+            status = response.status_code if response is not None else 500
+            route = request.scope.get("route")
+            key = f"{request.method} {getattr(route, 'path', request.url.path)}"
+            obs_stats.record("http", key, ms, error=status >= 500)
+            if response is not None:
+                response.headers["X-Process-Time-ms"] = f"{ms:.0f}"
+            if ms > 5000:
+                logger.warning("Slow request {} {:.0f}ms status={}", key, ms, status)
+
+
 app.add_middleware(OptionalAPIKeyMiddleware)
+app.add_middleware(TimingMiddleware)
 
 _cors_origins, _cors_credentials = _parse_cors_origins()
 app.add_middleware(
@@ -118,6 +143,18 @@ app.add_middleware(
 )
 
 app.include_router(router)
+
+
+from app.services.llm_service import LLMNotConfiguredError  # noqa: E402
+
+
+@app.exception_handler(LLMNotConfiguredError)
+async def _llm_not_configured(request: Request, exc: LLMNotConfiguredError):
+    logger.error("LLM not configured: {}", exc)
+    return JSONResponse(
+        status_code=503,
+        content={"detail": "Dịch vụ AI chưa được cấu hình. Vui lòng liên hệ quản trị viên."},
+    )
 
 
 @app.get("/")
