@@ -237,52 +237,46 @@ async def generate_test(request: TestRequest):
 async def submit_answers(request: SubmitRequest):
     """Chấm bài và trả về feedback chi tiết với giải thích kiểu 'thầy cô Việt'."""
     try:
-        feedbacks = []
-        correct_count = 0
-
+        import asyncio
         part_value = request.part.value if request.part else None
+        sem = asyncio.Semaphore(5)
 
-        for answer in request.answers:
+        async def _one(answer):
             is_correct = (
                 answer.user_answer == answer.correct_answer
                 or answer.user_answer.startswith(answer.correct_answer)
             )
-            if is_correct:
-                correct_count += 1
-
             question_text = answer.question_content or f"Câu {answer.question_id}"
             options_text = ", ".join(answer.options) if answer.options else ""
-
             rag_query = f"{question_text} {options_text}"
             if answer.passage:
                 rag_query = f"{answer.passage[:300]} {rag_query}"
-            context = rag_service.retrieve(rag_query, k=3)
-
-            explanation = await llm_service.explain_answer(
-                question=f"{question_text}\nĐáp án: {options_text}" if options_text else question_text,
-                user_answer=answer.user_answer,
-                correct_answer=answer.correct_answer,
-                context=context,
-                part=part_value,
-                passage=answer.passage or "",
-            )
-
-            sources = []
-            if context:
-                sources = [
-                    line.replace("[Nguồn: ", "").replace("]", "")
-                    for line in context.split("\n")
-                    if line.startswith("[Nguồn:")
-                ]
-
-            feedbacks.append(Feedback(
+            async with sem:
+                context = await run_in_threadpool(rag_service.retrieve, rag_query, 3)
+                explanation = await llm_service.explain_answer(
+                    question=f"{question_text}\nĐáp án: {options_text}" if options_text else question_text,
+                    user_answer=answer.user_answer,
+                    correct_answer=answer.correct_answer,
+                    context=context,
+                    part=part_value,
+                    passage=answer.passage or "",
+                )
+            sources = [
+                line.replace("[Nguồn: ", "").replace("]", "")
+                for line in (context or "").split("\n")
+                if line.startswith("[Nguồn:")
+            ]
+            return Feedback(
                 question_id=answer.question_id,
                 is_correct=is_correct,
                 user_answer=answer.user_answer,
                 correct_answer=answer.correct_answer,
                 explanation=explanation,
                 sources=sources,
-            ))
+            )
+
+        feedbacks = await asyncio.gather(*(_one(a) for a in request.answers))
+        correct_count = sum(1 for f in feedbacks if f.is_correct)
 
         total = len(request.answers)
         return SubmitResponse(

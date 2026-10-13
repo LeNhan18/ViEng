@@ -4,8 +4,6 @@ from app.core.config import get_settings
 from app.models.schemas import Skill, Level, ExamType, ToeicReadingPart
 from app.services.rag_service import rag_service
 from loguru import logger
-from transformers import AutoTokenizer, AutoModelForCausalLM
-import torch
 import random
 
 SYSTEM_PROMPT = (
@@ -81,7 +79,8 @@ class LLMService:
         logger.info(f"Loading fine-tuned model: {settings.hf_model_name}")
 
         try:
-
+            import torch
+            from transformers import AutoTokenizer, AutoModelForCausalLM
             self._hf_tokenizer = AutoTokenizer.from_pretrained(settings.hf_model_name)
             self._hf_model = AutoModelForCausalLM.from_pretrained(
                 settings.hf_model_name,

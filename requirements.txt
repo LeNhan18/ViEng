@@ -58,3 +58,5 @@ PyJWT>=2.9.0
 
 # Redis memory
 redis>=5.0.0
+
+python-multipart>=0.0.9
