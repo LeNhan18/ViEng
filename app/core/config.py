@@ -16,11 +16,17 @@ class Settings(BaseSettings):
     # Đảm bảo trong file .env bạn đặt tên biến là OPENROUTER_API_KEY
     openrouter_api_key: str = ""
     # LLM provider:
-    # - "auto": ưu tiên OpenRouter -> Groq -> OpenAI; nếu USE_FINETUNED_MODEL=true thì dùng HF (local hoặc inference)
-    # - "openrouter" | "groq" | "openai" | "hf_inference" | "hf_local"
+    # - "auto": ưu tiên Claude (ANTHROPIC_API_KEY) -> OpenRouter; USE_FINETUNED_MODEL=true thì dùng HF
+    # - "anthropic" | "openrouter" | "hf_inference" | "hf_local"
     llm_provider: str = "auto"
     # Model OpenRouter mặc định cho mọi tác vụ.
     llm_model: str = "openai/gpt-4o-mini"
+
+    # Claude API (Anthropic) qua endpoint tương thích OpenAI.
+    # LLM_PROVIDER=auto sẽ ưu tiên Claude khi có ANTHROPIC_API_KEY.
+    anthropic_api_key: str = ""
+    anthropic_model: str = "claude-haiku-5-5"
+    anthropic_base_url: str = "https://api.anthropic.com/v1/"
     # Số lần cho LLM tự sửa khi output sai schema/nghiệp vụ.
     llm_max_repairs: int = 2
 

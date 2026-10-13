@@ -17,6 +17,7 @@ from pathlib import Path
 
 from evals.suites import SUITES, SuiteResult
 from evals import llm as ev
+from app.services.llm_service import llm_service
 
 ROOT = Path(__file__).parent
 THRESHOLDS = json.loads((ROOT / "thresholds.json").read_text(encoding="utf-8"))
@@ -68,7 +69,6 @@ async def main(argv=None) -> int:
 
     names = list(SUITES) if args.suite == "all" else [s.strip() for s in args.suite.split(",")]
     params = QUICK if args.quick else FULL
-    from app.core.config import get_settings
 
     t0 = time.perf_counter()
     suites = []
@@ -85,7 +85,7 @@ async def main(argv=None) -> int:
     passed = all(c["passed"] for s in suites for c in s["checks"]) and not any(s.get("error") for s in suites)
     report = {
         "mode": "quick" if args.quick else "full",
-        "models": {"app": get_settings().llm_model, "solver": ev.solver_model(), "judge": ev.judge_model()},
+        "models": {"app": llm_service.model, "solver": ev.solver_model(), "judge": ev.judge_model()},
         "suites": suites,
         "passed": passed,
         "elapsed_s": round(time.perf_counter() - t0, 1),

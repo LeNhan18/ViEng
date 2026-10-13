@@ -152,3 +152,43 @@ def test_translate_structured_and_metrics_endpoint(fake_llm):
         m = c.get("/api/v1/metrics").json()
     assert m["llm"]["translate"]["count"] == 1
     assert m["http"]["POST /api/v1/translate"]["count"] == 1
+
+
+# ---------------- Claude provider ----------------
+@pytest.mark.asyncio
+async def test_anthropic_provider_uses_haiku_text_mode_and_no_temperature(monkeypatch):
+    from app.core.config import get_settings
+    from app.services.llm_service import LLMService
+
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key")
+    monkeypatch.setenv("LLM_PROVIDER", "auto")
+    get_settings.cache_clear()
+    try:
+        svc = LLMService()
+        assert svc._vendor == "anthropic"
+        assert svc.model == "claude-haiku-5-5"
+        assert svc._structured_supported is False
+        assert svc._sampling(0.3) == {}
+
+        sent = []
+
+        class Comp:
+            async def create(self, **kw):
+                sent.append(kw)
+                return SimpleNamespace(
+                    choices=[SimpleNamespace(message=SimpleNamespace(content=json.dumps({"questions": [_q()]})))],
+                    usage=SimpleNamespace(prompt_tokens=1, completion_tokens=1),
+                )
+
+            async def parse(self, **kw):  # không được gọi với Anthropic
+                raise AssertionError("parse() must not be used for Anthropic")
+
+        svc._client = SimpleNamespace(chat=SimpleNamespace(completions=Comp()))
+        out = await svc.generate_questions(
+            ExamType.TOEIC, Skill.READING, Level.INTERMEDIATE, 1, ToeicReadingPart.PART5
+        )
+        assert out[0]["correct_answer"] == "B"
+        assert sent and all("temperature" not in kw for kw in sent)
+        assert sent[0]["model"] == "claude-haiku-5-5"
+    finally:
+        get_settings.cache_clear()

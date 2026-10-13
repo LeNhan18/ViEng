@@ -12,7 +12,6 @@ import re
 
 from pydantic import BaseModel, ValidationError
 
-from app.core.config import get_settings
 from app.services.llm_service import llm_service
 from app.services.structured import coerce_to_schema, extract_json
 
@@ -20,17 +19,17 @@ _SEM = asyncio.Semaphore(int(os.getenv("EVAL_CONCURRENCY", "5")))
 
 
 def solver_model() -> str:
-    return os.getenv("EVAL_SOLVER_MODEL") or get_settings().llm_model
+    return os.getenv("EVAL_SOLVER_MODEL") or llm_service.model
 
 
 def judge_model() -> str:
-    return os.getenv("EVAL_JUDGE_MODEL") or get_settings().llm_model
+    return os.getenv("EVAL_JUDGE_MODEL") or llm_service.model
 
 
 def _client():
-    client = llm_service._openrouter_client
+    client = llm_service._client
     if client is None:
-        raise RuntimeError("Eval cần OPENROUTER_API_KEY.")
+        raise RuntimeError("Eval cần ANTHROPIC_API_KEY hoặc OPENROUTER_API_KEY.")
     return client
 
 
@@ -39,8 +38,8 @@ async def ask_text(model: str, system: str, prompt: str, *, max_tokens: int = 40
         resp = await _client().chat.completions.create(
             model=model,
             messages=[{"role": "system", "content": system}, {"role": "user", "content": prompt}],
-            temperature=0,
             max_tokens=max_tokens,
+            **llm_service._sampling(0),
         )
     return resp.choices[0].message.content or ""
 

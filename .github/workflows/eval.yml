@@ -1,6 +1,6 @@
 name: LLM Eval
 
-# Chạy eval chất lượng với LLM thật. Cần secret OPENROUTER_API_KEY.
+# Chạy eval chất lượng với LLM thật. Cần secret ANTHROPIC_API_KEY (hoặc OPENROUTER_API_KEY).
 # Tuỳ chọn: biến repo EVAL_SOLVER_MODEL / EVAL_JUDGE_MODEL (nên khác họ với LLM_MODEL).
 on:
   pull_request:
@@ -28,7 +28,10 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 30
     env:
+      ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+      ANTHROPIC_MODEL: ${{ vars.ANTHROPIC_MODEL || 'claude-haiku-5-5' }}
       OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+      HAS_LLM_KEY: ${{ secrets.ANTHROPIC_API_KEY != '' || secrets.OPENROUTER_API_KEY != '' }}
       LLM_MODEL: ${{ vars.LLM_MODEL || 'openai/gpt-4o-mini' }}
       EVAL_SOLVER_MODEL: ${{ vars.EVAL_SOLVER_MODEL }}
       EVAL_JUDGE_MODEL: ${{ vars.EVAL_JUDGE_MODEL }}
@@ -36,12 +39,12 @@ jobs:
       OCR_ENABLED: "false"
     steps:
       - name: Skip when no API key
-        if: env.OPENROUTER_API_KEY == ''
-        run: echo "::notice::OPENROUTER_API_KEY chưa được cấu hình - bỏ qua eval."
+        if: env.HAS_LLM_KEY != 'true'
+        run: echo "::notice::Chưa có ANTHROPIC_API_KEY/OPENROUTER_API_KEY - bỏ qua eval."
       - uses: actions/checkout@v4
-        if: env.OPENROUTER_API_KEY != ''
+        if: env.HAS_LLM_KEY == 'true'
       - uses: actions/setup-python@v5
-        if: env.OPENROUTER_API_KEY != ''
+        if: env.HAS_LLM_KEY == 'true'
         with:
           python-version: "3.11"
           cache: "pip"
@@ -49,17 +52,17 @@ jobs:
             requirements.lite.txt
             requirements-dev.txt
       - name: Install deps
-        if: env.OPENROUTER_API_KEY != ''
+        if: env.HAS_LLM_KEY == 'true'
         run: pip install -r requirements.lite.txt -r requirements-dev.txt
       - name: Run eval
-        if: env.OPENROUTER_API_KEY != ''
+        if: env.HAS_LLM_KEY == 'true'
         run: |
           MODE="${{ github.event.inputs.mode || (github.event_name == 'pull_request' && 'quick' || 'full') }}"
           SUITE="${{ github.event.inputs.suite || 'all' }}"
           FLAG=""; [ "$MODE" = "quick" ] && FLAG="--quick"
           python -m evals.run --suite "$SUITE" $FLAG
       - name: Upload report
-        if: always() && env.OPENROUTER_API_KEY != ''
+        if: always() && env.HAS_LLM_KEY == 'true'
         uses: actions/upload-artifact@v4
         with:
           name: eval-report

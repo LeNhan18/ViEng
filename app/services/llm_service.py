@@ -72,7 +72,9 @@ class LLMService:
     def __init__(self):
         settings = get_settings()
         self._openai_client = None
-        self._openrouter_client = None
+        self._client = None          # client OpenAI-compatible đang dùng
+        self._vendor = ""            # "anthropic" | "openrouter" | ""
+        self._model_name = ""
         self._hf_model = None
         self._hf_tokenizer = None
 
@@ -80,20 +82,59 @@ class LLMService:
             logger.info(
                 f"Sẽ dùng fine-tuned model: {settings.hf_model_name} (provider={settings.llm_provider})"
             )
-        if settings.openrouter_api_key:
-            self._openrouter_client = make_async_openai_client(
+        # Tắt structured outputs nếu provider/model không hỗ trợ (tự phát hiện).
+        self._structured_supported = True
+
+        provider = (settings.llm_provider or "auto").strip().lower()
+        use_anthropic = bool(settings.anthropic_api_key) and provider in ("auto", "anthropic")
+        if provider == "anthropic" and not settings.anthropic_api_key:
+            logger.warning("LLM_PROVIDER=anthropic nhưng thiếu ANTHROPIC_API_KEY.")
+
+        if use_anthropic:
+            self._client = make_async_openai_client(
+                base_url=settings.anthropic_base_url,
+                api_key=settings.anthropic_api_key,
+                timeout=60.0,
+                max_retries=2,
+            )
+            self._vendor = "anthropic"
+            self._model_name = settings.anthropic_model
+            # Endpoint OpenAI-compat của Anthropic bỏ qua response_format -> dùng JSON text mode.
+            self._structured_supported = False
+            logger.info("LLM: Claude API, model={}", self._model_name)
+        elif settings.openrouter_api_key:
+            self._client = make_async_openai_client(
                 base_url="https://openrouter.ai/api/v1",
                 api_key=settings.openrouter_api_key,
                 timeout=60.0,
                 max_retries=2,
             )
-        # Tắt structured outputs nếu provider/model không hỗ trợ (tự phát hiện).
-        self._structured_supported = True
+            self._vendor = "openrouter"
+            logger.info("LLM: OpenRouter, model={}", settings.llm_model)
+
+    # Tên cũ, giữ để tương thích (test/eval cũ dùng thuộc tính này).
+    @property
+    def _openrouter_client(self):
+        return self._client
+
+    @_openrouter_client.setter
+    def _openrouter_client(self, value):
+        self._client = value
+
+    @property
+    def model(self) -> str:
+        return self._model_name or get_settings().llm_model
+
+    def _sampling(self, temperature: float | None) -> dict:
+        """Claude đời mới trả 400 nếu temperature < 1 -> không gửi temperature cho Anthropic."""
+        if self._vendor == "anthropic" or temperature is None:
+            return {}
+        return {"temperature": temperature}
 
     def _provider(self, override: str | None = None) -> str:
         settings = get_settings()
         p = (override or settings.llm_provider or "auto").strip().lower()
-        if p not in ("auto", "openrouter", "hf_inference", "hf_local"):
+        if p not in ("auto", "anthropic", "openrouter", "hf_inference", "hf_local"):
             logger.warning(f"LLM provider không hợp lệ: {override or settings.llm_provider} -> dùng auto")
             return "auto"
         return p
@@ -191,10 +232,10 @@ class LLMService:
 
     @property
     def _client_and_model(self) -> tuple:
-        if self._openrouter_client:
-            return self._openrouter_client, get_settings().llm_model
+        if self._client:
+            return self._client, self.model
         raise LLMNotConfiguredError(
-            "Chưa cấu hình API key. Thêm OPENROUTER_API_KEY vào .env"
+            "Chưa cấu hình API key. Thêm ANTHROPIC_API_KEY hoặc OPENROUTER_API_KEY vào .env"
         )
 
     @property
@@ -370,8 +411,8 @@ class LLMService:
                     {"role": "system", "content": sys_content},
                     {"role": "user", "content": prompt},
                 ],
-                temperature=temp,
                 max_tokens=max_tokens,
+                **self._sampling(temp),
             )
             span.add_usage(getattr(response, "usage", None))
             return response.choices[0].message.content
@@ -409,7 +450,7 @@ class LLMService:
             try:
                 resp = await parse(
                     model=model, messages=messages, response_format=schema,
-                    temperature=temperature, max_tokens=max_tokens,
+                    max_tokens=max_tokens, **self._sampling(temperature),
                 )
                 span.add_usage(getattr(resp, "usage", None))
                 msg = resp.choices[0].message
@@ -430,7 +471,7 @@ class LLMService:
                     raise
 
         resp = await client.chat.completions.create(
-            model=model, messages=messages, temperature=temperature, max_tokens=max_tokens,
+            model=model, messages=messages, max_tokens=max_tokens, **self._sampling(temperature),
         )
         span.add_usage(getattr(resp, "usage", None))
         return self._parse_raw(resp.choices[0].message.content or "", schema)
@@ -462,7 +503,7 @@ class LLMService:
             {"role": "system", "content": system_msg or SYSTEM_PROMPT},
             {"role": "user", "content": prompt},
         ]
-        model = settings.hf_model_name if self._use_finetuned else get_settings().llm_model
+        model = settings.hf_model_name if self._use_finetuned else self.model
         errors: list[str] = []
         async with llm_span(task, model) as span:
             for attempt in range(settings.llm_max_repairs + 1):
@@ -742,8 +783,8 @@ class LLMService:
             response = await client.chat.completions.create(
                 model=model,
                 messages=messages,
-                temperature=0.7,
                 max_tokens=1500,
+                **self._sampling(0.7),
             )
             span.add_usage(getattr(response, "usage", None))
             return response.choices[0].message.content
