@@ -8,20 +8,27 @@ on:
 jobs:
   backend:
     runs-on: ubuntu-latest
+    env:
+      RAG_ENABLED: "false"
+      OCR_ENABLED: "false"
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
           python-version: "3.11"
           cache: "pip"
-      - name: Install backend deps
+          cache-dependency-path: |
+            requirements.lite.txt
+            requirements-dev.txt
+      # Cài đúng bộ deps của Docker image mặc định (lite) để bắt lỗi import/khởi động.
+      - name: Install backend deps (lite = Docker default)
         run: |
           python -m pip install --upgrade pip
-          pip install torch --index-url https://download.pytorch.org/whl/cpu
-          pip install -r requirements.txt
-      - name: Run tests
-        run: |
-          pytest -q
+          pip install -r requirements.lite.txt -r requirements-dev.txt
+      - name: Smoke - app imports
+        run: python -c "import app.main"
+      - name: Run tests (API, structured outputs, eval harness)
+        run: pytest -q
 
   frontend:
     runs-on: ubuntu-latest
