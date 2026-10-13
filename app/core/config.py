@@ -59,6 +59,8 @@ class Settings(BaseSettings):
     db_user: str = "root"
     db_password: str = ""
     db_name: str = "vieng"
+    # Ghi đè toàn bộ URL DB (vd. sqlite+aiosqlite:///./test.db cho test local). Trống = MySQL ở trên.
+    database_url: str = ""
 
     # Redis/Redict memory storage
     use_redis: bool = False

@@ -50,3 +50,6 @@ PyJWT>=2.9.0
 # Missing runtime deps
 redis>=5.0.0
 python-multipart>=0.0.9
+
+# PDF text layer (OCR fallback không cần GPU)
+pypdf>=5.0.0
