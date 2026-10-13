@@ -27,6 +27,17 @@ class Settings(BaseSettings):
     anthropic_api_key: str = ""
     anthropic_model: str = "claude-haiku-5-5"
     anthropic_base_url: str = "https://api.anthropic.com/v1/"
+    # Jev (TypeSafe AI) - model ra quyết định, tuỳ chọn. Trống key = tắt.
+    typesafe_api_key: str = ""
+    jev_model: str = "jev-latest"
+    jev_base_url: str = "https://api.typesafe.ai/v1"
+    jev_timeout_s: float = 8.0
+    # Kiểm tra đáp án đề do LLM sinh: Jev chọn khác đáp án với độ tin cậy >= ngưỡng -> bắt LLM sửa.
+    jev_verify_questions: bool = True
+    jev_verify_threshold: float = 0.8
+    # Bỏ qua RAG cho tin nhắn không cần tra cứu (chào hỏi...) khi P(cần tra cứu) < ngưỡng.
+    jev_rag_gate: bool = True
+    jev_rag_threshold: float = 0.3
     # Số lần cho LLM tự sửa khi output sai schema/nghiệp vụ.
     llm_max_repairs: int = 2
 

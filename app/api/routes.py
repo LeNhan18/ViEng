@@ -23,6 +23,7 @@ from app.models.orm import User
 from app.services.llm_service import LLMNotConfiguredError, llm_service
 from app.services.ocr_service import OCRError, ocr_service
 from app.services.rag_service import rag_service
+from app.services.jev_service import jev_service
 from app.services.structured import StructuredOutputError
 from app.core.observability import stats as obs_stats
 from app.services.chat_memory_service import chat_memory_service
@@ -396,8 +397,10 @@ async def chat(
                     db=db
                 )
 
-            # 3. Truy xuất RAG context
-            rag_context = rag_service.retrieve_mmr(request.message, k=4, fetch_k=10)
+            # 3. Truy xuất RAG context (Jev quyết định có cần tra cứu không; chạy ngoài event loop)
+            rag_context = ""
+            if await jev_service.needs_rag(request.message):
+                rag_context = await run_in_threadpool(rag_service.retrieve_mmr, request.message, 4, 10)
             sources = []
             for m in re.finditer(r"\[Nguồn: ([^\]]+)\]", rag_context or ""):
                 p = m.group(1).strip()

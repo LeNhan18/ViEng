@@ -6,6 +6,7 @@ from app.core.config import get_settings
 from app.models.schemas import Skill, Level, ExamType, ToeicReadingPart
 from app.services.rag_service import rag_service
 from app.core.observability import llm_span, make_async_openai_client
+from app.services.jev_service import jev_service
 from app.services.structured import (
     Part6Set,
     Part7Set,
@@ -496,6 +497,7 @@ class LLMService:
         temperature: float = 0.7,
         system_msg: str = "",
         provider_override: str | None = None,
+        verifier=None,
     ) -> BaseModel:
         """Gọi LLM -> parse theo schema -> validate nghiệp vụ -> cho LLM tự sửa nếu lỗi."""
         settings = get_settings()
@@ -513,6 +515,9 @@ class LLMService:
                 )
                 if obj is not None and not errors:
                     errors = validator(obj)
+                # Kiểm tra độc lập (Jev) chỉ khi đã qua schema + validator: rẻ hơn và tránh nhiễu.
+                if obj is not None and not errors and verifier is not None:
+                    errors = await verifier(obj)
                 if not errors:
                     return obj
                 logger.warning("[{}] output lỗi (lần {}): {}", task, attempt + 1, errors[:5])
@@ -533,6 +538,27 @@ class LLMService:
                 # Giảm nhiệt độ khi sửa để model bám yêu cầu hơn.
                 temperature = min(temperature, 0.4)
             raise StructuredOutputError(f"[{task}] LLM không trả về output hợp lệ.", errors)
+
+    @staticmethod
+    def _jev_verifier(limit: int):
+        """Async verifier: Jev làm thử các câu (trong phạm vi `limit` item đầu) -> lỗi nếu bất đồng."""
+        if not (jev_service.enabled and get_settings().jev_verify_questions):
+            return None
+
+        async def verify(obj) -> list[str]:
+            items = []
+            if isinstance(obj, QuestionSet):
+                items = [("", q.content, q.options, q.correct_answer) for q in obj.questions[:limit]]
+            elif isinstance(obj, Part6Set):
+                for p in obj.passages[:limit]:
+                    items += [(p.passage, q.content, q.options, q.correct_answer) for q in p.questions]
+            elif isinstance(obj, Part7Set):
+                for p in obj.passages[:limit]:
+                    ctx = "\n\n---\n\n".join(p.passages)
+                    items += [(ctx, q.content, q.options, q.correct_answer) for q in p.questions]
+            return jev_service.disagreement_errors(await jev_service.verify_questions(items))
+
+        return verify
 
     async def generate_questions(
         self,
@@ -567,7 +593,7 @@ class LLMService:
                 obj = await self._generate_structured(
                     prompt, QuestionSet,
                     lambda o: validate_question_set(o, num_questions, require_blank=True),
-                    task="generate_part5", max_tokens=2000, **common,
+                    task="generate_part5", max_tokens=2000, verifier=self._jev_verifier(num_questions), **common,
                 )
                 return [q.model_dump() for q in to_questions(obj, num_questions)]
 
@@ -576,7 +602,7 @@ class LLMService:
                 prompt = self._build_part6_prompt(level, num_passages, rag_context, selected_grammar, selected_business)
                 obj = await self._generate_structured(
                     prompt, Part6Set, lambda o: validate_part6(o, num_passages),
-                    task="generate_part6", max_tokens=3000, **common,
+                    task="generate_part6", max_tokens=3000, verifier=self._jev_verifier(num_passages), **common,
                 )
                 return [p.model_dump() for p in to_part6(obj, num_passages)]
 
@@ -587,7 +613,7 @@ class LLMService:
                 prompt = build(level, n, rag_context, selected_grammar, selected_business)
                 obj = await self._generate_structured(
                     prompt, Part7Set, lambda o: validate_part7(o, n, multiple=multiple),
-                    task=f"generate_{part.value}", max_tokens=4000, **common,
+                    task=f"generate_{part.value}", max_tokens=4000, verifier=self._jev_verifier(n), **common,
                 )
                 return [p.model_dump() for p in to_part7(obj, n)]
 
@@ -615,7 +641,7 @@ class LLMService:
         obj = await self._generate_structured(
             prompt, QuestionSet,
             lambda o: validate_question_set(o, num_questions, require_blank=False),
-            task=f"generate_{exam_type.value}_{skill.value}", **common,
+            task=f"generate_{exam_type.value}_{skill.value}", verifier=self._jev_verifier(num_questions), **common,
         )
         return [q.model_dump() for q in to_questions(obj, num_questions)]
 

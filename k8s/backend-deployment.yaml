@@ -39,6 +39,12 @@ spec:
                   optional: true
             - name: ANTHROPIC_MODEL
               value: "claude-haiku-5-5"
+            - name: TYPESAFE_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: vieng-secrets
+                  key: TYPESAFE_API_KEY
+                  optional: true
             - name: OPENROUTER_API_KEY
               valueFrom:
                 secretKeyRef:
