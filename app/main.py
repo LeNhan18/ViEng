@@ -145,6 +145,18 @@ app.add_middleware(
 app.include_router(router)
 
 
+from app.services.llm_service import LLMNotConfiguredError  # noqa: E402
+
+
+@app.exception_handler(LLMNotConfiguredError)
+async def _llm_not_configured(request: Request, exc: LLMNotConfiguredError):
+    logger.error("LLM not configured: {}", exc)
+    return JSONResponse(
+        status_code=503,
+        content={"detail": "Dịch vụ AI chưa được cấu hình. Vui lòng liên hệ quản trị viên."},
+    )
+
+
 @app.get("/")
 async def root():
     return {

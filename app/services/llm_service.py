@@ -26,6 +26,10 @@ from app.services.structured import (
 from loguru import logger
 import random
 
+class LLMNotConfiguredError(RuntimeError):
+    """Chưa có API key/model cho LLM."""
+
+
 SYSTEM_PROMPT = (
     "Bạn là giáo viên luyện thi TOEIC/IELTS chuyên nghiệp tại Việt Nam. "
     "Khi được cung cấp tài liệu tham khảo, hãy sử dụng nội dung đó để tạo câu hỏi/giải thích chính xác hơn. "
@@ -189,7 +193,7 @@ class LLMService:
     def _client_and_model(self) -> tuple:
         if self._openrouter_client:
             return self._openrouter_client, get_settings().llm_model
-        raise RuntimeError(
+        raise LLMNotConfiguredError(
             "Chưa cấu hình API key. Thêm OPENROUTER_API_KEY vào .env"
         )
 

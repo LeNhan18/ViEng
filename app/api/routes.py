@@ -20,7 +20,7 @@ from app.models.schemas import (
 )
 from app.db.database import get_db
 from app.models.orm import User
-from app.services.llm_service import llm_service
+from app.services.llm_service import LLMNotConfiguredError, llm_service
 from app.services.ocr_service import OCRError, ocr_service
 from app.services.rag_service import rag_service
 from app.services.structured import StructuredOutputError
@@ -239,6 +239,8 @@ async def generate_test(request: TestRequest):
     except json.JSONDecodeError:
         logger.error("LLM returned invalid JSON")
         raise HTTPException(status_code=502, detail="LLM trả về dữ liệu không hợp lệ. Vui lòng thử lại.")
+    except LLMNotConfiguredError:
+        raise
     except Exception as e:
         logger.exception("Error generating test: {}", e)
         raise HTTPException(status_code=500, detail=_INTERNAL_ERROR)
@@ -296,6 +298,8 @@ async def submit_answers(request: SubmitRequest):
             percentage=round(correct_count / total * 100, 1) if total > 0 else 0,
             feedbacks=feedbacks,
         )
+    except LLMNotConfiguredError:
+        raise
     except Exception as e:
         logger.exception("Error submitting answers: {}", e)
         raise HTTPException(status_code=500, detail=_INTERNAL_ERROR)
@@ -316,6 +320,8 @@ async def text_to_speech(text: str = Body(..., embed=True, min_length=1, max_len
             media_type="audio/mpeg",
             headers={"Content-Disposition": "inline; filename=speech.mp3"},
         )
+    except LLMNotConfiguredError:
+        raise
     except Exception as e:
         logger.exception("TTS error: {}", e)
         raise HTTPException(status_code=500, detail="Không thể tạo audio. Vui lòng thử lại.")
@@ -348,6 +354,8 @@ async def translate_text(request: TranslateRequest):
             grammar_notes=result.get("grammar_notes", []),
             rag_context=rag_context[:500] if rag_context else "",
         )
+    except LLMNotConfiguredError:
+        raise
     except Exception as e:
         logger.exception("Error translating: {}", e)
         raise HTTPException(status_code=500, detail=_INTERNAL_ERROR)
@@ -422,6 +430,8 @@ async def chat(
             if db_context:
                 await db_context.__aexit__(None, None, None)
 
+    except LLMNotConfiguredError:
+        raise
     except Exception as e:
         logger.exception("Error in chat: {}", e)
         raise HTTPException(status_code=500, detail=_INTERNAL_ERROR)
@@ -451,6 +461,8 @@ async def chat_with_ocr(
 
     try:
         data = await file.read()
+    except LLMNotConfiguredError:
+        raise
     except Exception as e:
         logger.exception("Error reading uploaded file: {}", e)
         raise HTTPException(status_code=400, detail="Không đọc được file tải lên.")
@@ -556,6 +568,8 @@ async def chat_with_ocr(
             extracted_text=extracted,
             file_name=file.filename or "",
         )
+    except LLMNotConfiguredError:
+        raise
     except Exception as e:
         logger.exception("Error in chat_with_ocr LLM stage: {}", e)
         raise HTTPException(status_code=500, detail=_INTERNAL_ERROR)
@@ -568,6 +582,8 @@ async def ocr_only(file: UploadFile = File(...)):
         raise HTTPException(status_code=503, detail="Tính năng OCR đang bị tắt.")
     try:
         data = await file.read()
+    except LLMNotConfiguredError:
+        raise
     except Exception as e:
         logger.exception("Error reading uploaded file: {}", e)
         raise HTTPException(status_code=400, detail="Không đọc được file tải lên.")
@@ -630,6 +646,8 @@ async def list_vectorstore(limit: int = 20, offset: int = 0):
                 "length": len(d),
             })
         return {"chunks": chunks, "total": total, "limit": limit, "offset": offset}
+    except LLMNotConfiguredError:
+        raise
     except Exception as e:
         logger.exception("Error listing vectorstore: {}", e)
         raise HTTPException(status_code=500, detail=_INTERNAL_ERROR)
@@ -671,6 +689,8 @@ async def get_chat_history(
         finally:
             if db_context:
                 await db_context.__aexit__(None, None, None)
+    except LLMNotConfiguredError:
+        raise
     except Exception as e:
         logger.exception("Error in get_chat_history: {}", e)
         raise HTTPException(status_code=500, detail=_INTERNAL_ERROR)
@@ -696,6 +716,8 @@ async def delete_chat_history(
         finally:
             if db_context:
                 await db_context.__aexit__(None, None, None)
+    except LLMNotConfiguredError:
+        raise
     except Exception as e:
         logger.exception("Error in delete_chat_history: {}", e)
         raise HTTPException(status_code=500, detail=_INTERNAL_ERROR)
