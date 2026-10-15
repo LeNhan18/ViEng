@@ -16,7 +16,7 @@ spec:
       containers:
         - name: frontend
           # Đổi tag theo image bạn push lên GHCR
-          image: ghcr.io/LeNhan18/ViEng-frontend:main
+          image: ghcr.io/lenhan18/vieng-frontend:main
           imagePullPolicy: IfNotPresent
           ports:
             - containerPort: 80

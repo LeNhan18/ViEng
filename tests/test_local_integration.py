@@ -245,3 +245,134 @@ def test_metrics_and_timing_header(env):
     assert int(r.headers["X-Process-Time-ms"]) >= 0
     m = c.get("/api/v1/metrics").json()
     assert m["http"]["GET /api/v1/health"]["count"] >= 1
+
+
+# ---------------- chat: lưu sau khi thành công, streaming ----------------
+def test_failed_llm_leaves_no_orphan_message(env, monkeypatch):
+    c, r = env["client"], env["redis"]
+    token = _register(c).json()["access_token"]
+
+    async def boom(*a, **k):
+        raise RuntimeError("LLM down")
+
+    monkeypatch.setattr(llm_service, "chat", boom)
+    assert c.post("/api/v1/chat", json={"message": "hỏi"}, headers=_auth(token)).status_code == 500
+    assert c.get("/api/v1/chat/history", headers=_auth(token)).json() == []
+    assert r.keys("vieng:chat_history:*") == []
+
+
+def test_llm_receives_only_recent_window(env):
+    c = env["client"]
+    token = _register(c).json()["access_token"]
+    for i in range(8):
+        c.post("/api/v1/chat", json={"message": f"m{i}"}, headers=_auth(token))
+    assert len(env["histories"][-1]) == llm_service.CHAT_HISTORY_WINDOW
+
+
+def _parse_sse(text: str) -> list[tuple[str, dict]]:
+    import json as _json
+
+    events = []
+    for block in text.strip().split("\n\n"):
+        lines = dict(line.split(": ", 1) for line in block.splitlines() if ": " in line)
+        events.append((lines["event"], _json.loads(lines["data"])))
+    return events
+
+
+def test_chat_stream_sse_and_memory(env, monkeypatch):
+    c = env["client"]
+    token = _register(c).json()["access_token"]
+
+    async def fake_stream(message, history, rag_context="", *, llm_provider=None):
+        for part in ["Since ", "+ mốc ", "thời gian."]:
+            yield part
+
+    monkeypatch.setattr(llm_service, "chat_stream", fake_stream)
+    monkeypatch.setattr(llm_service, "ensure_configured", lambda: None)
+    with c.stream("POST", "/api/v1/chat/stream", json={"message": "since?"}, headers=_auth(token)) as resp:
+        assert resp.status_code == 200
+        assert resp.headers["content-type"].startswith("text/event-stream")
+        body = "".join(resp.iter_text())
+    events = _parse_sse(body)
+    assert [e for e, _ in events] == ["meta", "delta", "delta", "delta", "done"]
+    assert events[-1][1]["message"] == "Since + mốc thời gian."
+    hist = c.get("/api/v1/chat/history", headers=_auth(token)).json()
+    assert [(m["role"], m["content"]) for m in hist] == [
+        ("user", "since?"), ("assistant", "Since + mốc thời gian."),
+    ]
+
+
+def test_chat_stream_error_event_and_no_save(env, monkeypatch):
+    c = env["client"]
+    token = _register(c).json()["access_token"]
+
+    async def broken(message, history, rag_context="", *, llm_provider=None):
+        yield "nửa câu"
+        raise RuntimeError("cut")
+
+    monkeypatch.setattr(llm_service, "chat_stream", broken)
+    monkeypatch.setattr(llm_service, "ensure_configured", lambda: None)
+    with c.stream("POST", "/api/v1/chat/stream", json={"message": "x"}, headers=_auth(token)) as resp:
+        body = "".join(resp.iter_text())
+    events = _parse_sse(body)
+    assert events[-1][0] == "error" and "lỗi hệ thống" in events[-1][1]["detail"]
+    assert c.get("/api/v1/chat/history", headers=_auth(token)).json() == []
+
+
+def test_chat_stream_503_without_llm(env, monkeypatch):
+    monkeypatch.setattr(llm_service, "_client", None)
+    monkeypatch.setattr(type(llm_service), "_use_finetuned", property(lambda self: False))
+    r = env["client"].post("/api/v1/chat/stream", json={"message": "x"})
+    assert r.status_code == 503
+
+
+# ---------------- cache TTS / translate ----------------
+def test_tts_cached_in_redis(env, monkeypatch):
+    import sys
+    import types
+
+    calls = []
+
+    class FakeCommunicate:
+        def __init__(self, text, voice):
+            calls.append((text, voice))
+
+        async def stream(self):
+            yield {"type": "audio", "data": b"ID3fake-mp3"}
+
+    monkeypatch.setitem(sys.modules, "edge_tts", types.SimpleNamespace(Communicate=FakeCommunicate))
+    c = env["client"]
+    r1 = c.post("/api/v1/tts", json={"text": "Hello   world"})
+    r2 = c.post("/api/v1/tts", json={"text": "Hello world"})
+    assert r1.content == r2.content == b"ID3fake-mp3"
+    assert (r1.headers["X-Cache"], r2.headers["X-Cache"]) == ("MISS", "HIT")
+    assert calls == [("Hello world", "en-US-AriaNeural")]
+    assert env["redis"].keys("vieng:cache:tts:*")
+
+
+def test_translate_cached_only_when_complete(env, monkeypatch):
+    calls = []
+
+    async def fake_translate(text, direction, level, rag_context="", *, llm_provider=None):
+        calls.append(text)
+        if text == "fallback":
+            return {"translated": "raw", "vocabulary": [], "grammar_notes": []}
+        return {"translated": "Xin chào", "vocabulary": [{"word": "hello", "meaning": "xin chào", "example": "Hi"}],
+                "grammar_notes": []}
+
+    monkeypatch.setattr(llm_service, "translate", fake_translate)
+    c = env["client"]
+    body = {"text": "Hello", "direction": "en_to_vi", "level": "beginner"}
+    assert c.post("/api/v1/translate", json=body).json()["translated"] == "Xin chào"
+    assert c.post("/api/v1/translate", json=body).json()["translated"] == "Xin chào"
+    assert calls == ["Hello"]
+    # Khác trình độ -> khác key
+    c.post("/api/v1/translate", json={**body, "level": "advanced"})
+    assert calls == ["Hello", "Hello"]
+    # Bản fallback (thiếu từ vựng/ngữ pháp) không được cache
+    fb = {**body, "text": "fallback"}
+    c.post("/api/v1/translate", json=fb)
+    c.post("/api/v1/translate", json=fb)
+    assert calls.count("fallback") == 2
+    m = c.get("/api/v1/metrics").json()["cache"]
+    assert m["translate:hit"]["count"] == 1

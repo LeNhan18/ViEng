@@ -1,6 +1,29 @@
+import re
+import threading
+
 from app.core.config import get_settings
 from loguru import logger
 from pathlib import Path
+
+_TOKEN = re.compile(r"\w+", re.UNICODE)
+
+
+def tokenize(text: str) -> list[str]:
+    """Tách từ cho BM25 (hỗ trợ Unicode, giữ dấu tiếng Việt)."""
+    return [t.lower() for t in _TOKEN.findall(text or "")]
+
+
+def rrf_fuse(rankings: list[list[str]], k: int = 60) -> list[str]:
+    """Reciprocal Rank Fusion: gộp nhiều bảng xếp hạng id, không cần chuẩn hoá điểm."""
+    scores: dict[str, float] = {}
+    for ranking in rankings:
+        for rank, doc_id in enumerate(ranking):
+            scores[doc_id] = scores.get(doc_id, 0.0) + 1.0 / (k + rank + 1)
+    return sorted(scores, key=lambda d: (-scores[d], d))
+
+
+def _doc_key(content: str, meta: dict | None) -> str:
+    return f"{(meta or {}).get('source', '')}::{content}"
 
 
 class RAGService:
@@ -19,6 +42,14 @@ class RAGService:
         # và đỡ spam log. Khi đó RAG hoạt động ở chế độ no-op (trả "" / []).
         self._embedder_broken = False
         self._vectorstore_broken = False
+        # BM25 index (lazy) + cross-encoder (lazy)
+        self._bm25 = None
+        self._bm25_docs: list = []
+        self._bm25_tokens: list[set] = []
+        self._bm25_lock = threading.Lock()
+        self._bm25_unavailable = False
+        self._reranker = None
+        self._reranker_broken = False
 
     def _ensure_enabled(self) -> bool:
         if not self._enabled:
@@ -160,13 +191,16 @@ class RAGService:
         loaded_names = sorted({Path(d.metadata.get("source", "")).name for d in documents if d.metadata.get("source")})
         logger.info(f"Đã load {len(documents)} doc từ {len(loaded_names)} file: {', '.join(loaded_names[:10])}{'...' if len(loaded_names) > 10 else ''}")
 
+        settings = get_settings()
         splitter = RecursiveCharacterTextSplitter(
-            chunk_size=500,
-            chunk_overlap=50,
+            chunk_size=settings.rag_chunk_size,
+            chunk_overlap=settings.rag_chunk_overlap,
             separators=["\n\n", "\n", ". ", " ", ""],
         )
         chunks = splitter.split_documents(documents)
 
+        with self._bm25_lock:
+            self._bm25, self._bm25_docs = None, []
         self._vectorstore = Chroma.from_documents(
             documents=chunks,
             embedding=self._get_embeddings(),
@@ -176,10 +210,114 @@ class RAGService:
         logger.info(f"Indexed {len(chunks)} chunks from {len(documents)} documents")
         return len(chunks)
 
+    # ------------------------------------------------------------------
+    # Hybrid retrieval
+    # ------------------------------------------------------------------
+    def _get_bm25(self, vectorstore):
+        if self._bm25 is not None or self._bm25_unavailable:
+            return self._bm25
+        with self._bm25_lock:
+            if self._bm25 is not None:
+                return self._bm25
+            try:
+                from rank_bm25 import BM25Plus
+            except ImportError:
+                self._bm25_unavailable = True
+                logger.info("rank_bm25 chưa cài -> RAG chỉ dùng vector search.")
+                return None
+            try:
+                data = vectorstore._collection.get(include=["documents", "metadatas"])
+            except Exception as e:
+                logger.warning("Không đọc được collection để dựng BM25: {}", e)
+                return None
+            docs = data.get("documents") or []
+            metas = data.get("metadatas") or [{}] * len(docs)
+            if not docs:
+                return None
+            from langchain_core.documents import Document
+
+            self._bm25_docs = [Document(page_content=d, metadata=m or {}) for d, m in zip(docs, metas)]
+            tokens = [tokenize(d) for d in docs]
+            self._bm25_tokens = [set(t) for t in tokens]
+            # BM25Plus: IDF luôn dương (Okapi cho IDF=0 với từ xuất hiện ở ~nửa số chunk).
+            self._bm25 = BM25Plus(tokens)
+            logger.info("BM25 index: {} chunks", len(docs))
+        return self._bm25
+
+    def _get_reranker(self):
+        model = get_settings().rag_reranker_model
+        if not model or self._reranker_broken:
+            return None
+        if self._reranker is None:
+            try:
+                from sentence_transformers import CrossEncoder
+
+                self._reranker = CrossEncoder(model, device="cpu")
+                logger.info("Loaded reranker {}", model)
+            except Exception as e:
+                self._reranker_broken = True
+                logger.warning("Không load được reranker ({}): {}", model, e)
+                return None
+        return self._reranker
+
+    def hybrid_search(self, query: str, k: int = 4, fetch_k: int | None = None) -> list:
+        """BM25 + vector -> RRF -> (rerank) -> top k Document."""
+        vectorstore = self._get_vectorstore()
+        if vectorstore is None:
+            return []
+        fetch_k = max(k, fetch_k or get_settings().rag_fetch_k)
+
+        pool: dict[str, object] = {}
+        rankings: list[list[str]] = []
+        try:
+            vec = vectorstore.similarity_search(query, k=fetch_k)
+        except Exception as e:
+            logger.warning("Vector search lỗi: {}", e)
+            vec = []
+        rankings.append([self._remember(pool, d) for d in vec])
+
+        bm25 = self._get_bm25(vectorstore)
+        if bm25 is not None:
+            q = tokenize(query)
+            if q:
+                qset = set(q)
+                scores = bm25.get_scores(q)
+                hits = [i for i in range(len(scores)) if qset & self._bm25_tokens[i]]
+                top = sorted(hits, key=lambda i: -scores[i])[:fetch_k]
+                rankings.append([self._remember(pool, self._bm25_docs[i]) for i in top])
+
+        fused = [pool[i] for i in rrf_fuse([r for r in rankings if r])]
+        reranker = self._get_reranker()
+        if reranker is not None and fused:
+            try:
+                cand = fused[:fetch_k]
+                scores = reranker.predict([(query, d.page_content) for d in cand])
+                fused = [d for _, d in sorted(zip(scores, cand), key=lambda x: -float(x[0]))]
+            except Exception as e:
+                logger.warning("Rerank lỗi, dùng thứ tự RRF: {}", e)
+        return fused[:k]
+
+    @staticmethod
+    def _remember(pool: dict, doc) -> str:
+        key = _doc_key(doc.page_content, getattr(doc, "metadata", None))
+        pool.setdefault(key, doc)
+        return key
+
+    @staticmethod
+    def _format(docs: list) -> str:
+        return "\n\n---\n\n".join(
+            f"[Nguồn: {doc.metadata.get('source', 'N/A')}]\n{doc.page_content}" for doc in docs
+        )
+
+    def _use_hybrid(self) -> bool:
+        return get_settings().rag_hybrid
+
     def retrieve(self, query: str, k: int = 3) -> str:
         """Truy xuất context liên quan từ knowledge base."""
         if not self._ensure_enabled():
             return ""
+        if self._use_hybrid():
+            return self._format(self.hybrid_search(query, k=k))
         vectorstore = self._get_vectorstore()
         if vectorstore is None:
             return ""
@@ -216,9 +354,14 @@ class RAGService:
         return filtered
 
     def retrieve_mmr(self, query: str, k: int = 3, fetch_k: int = 10, lambda_mult: float = 0.7) -> str:
-        """Truy xuất dùng MMR (Maximal Marginal Relevance) để tăng đa dạng kết quả."""
+        """Truy xuất dùng MMR (Maximal Marginal Relevance) để tăng đa dạng kết quả.
+
+        Khi RAG_HYBRID=true: dùng hybrid BM25 + vector (RRF) thay cho MMR.
+        """
         if not self._ensure_enabled():
             return ""
+        if self._use_hybrid():
+            return self._format(self.hybrid_search(query, k=k, fetch_k=max(fetch_k, get_settings().rag_fetch_k)))
         vectorstore = self._get_vectorstore()
         if vectorstore is None:
             return ""
@@ -249,10 +392,12 @@ rag_service = RAGService()
 
 def create_standalone_retriever(
     docs_dir: str = "data/knowledge_base",
-    embedding_model: str = "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2",
+    embedding_model: str | None = None,
     persist_dir: str = "./data/vectorstore",
 ):
     """Tạo retriever standalone (dùng trong scripts, không cần FastAPI)."""
+    # Phải dùng cùng embedder với app, nếu không vector truy vấn và vector đã index không khớp.
+    embedding_model = embedding_model or get_settings().embedding_model
     from langchain_community.embeddings import HuggingFaceEmbeddings
     from langchain_community.vectorstores import Chroma
     from langchain_text_splitters import RecursiveCharacterTextSplitter

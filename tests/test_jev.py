@@ -133,7 +133,9 @@ def test_chat_skips_rag_for_greeting(jev_on, monkeypatch):
     with TestClient(app) as c:
         r = c.post("/api/v1/chat", json={"message": "xin chào"})
     assert r.status_code == 200
-    assert retrieved == [] and contexts == [""]
+    # RAG có thể đã chạy song song, nhưng kết quả không được đưa vào prompt.
+    assert contexts == [""]
+    assert r.json()["sources"] == []
 
 
 def test_chat_uses_rag_for_grammar_question(jev_on, monkeypatch):

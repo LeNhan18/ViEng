@@ -209,7 +209,10 @@ class LLMService:
                 "Chưa cài huggingface-hub. Hãy pip install -r requirements.txt"
             ) from e
 
-        client = InferenceClient(model=settings.hf_model_name, token=(settings.hf_token or None))
+        client = getattr(self, "_hf_inference_client", None)
+        if client is None:
+            client = InferenceClient(model=settings.hf_model_name, token=(settings.hf_token or None))
+            self._hf_inference_client = client  # tạo 1 lần, tái sử dụng kết nối
 
         # Gộp system + user thành 1 prompt thuần để gọi text-generation.
         # (Giữ tương thích với pipeline prompt hiện tại.)
@@ -771,6 +774,30 @@ class LLMService:
             )
             return {"translated": raw, "vocabulary": [], "grammar_notes": []}
 
+    CHAT_HISTORY_WINDOW = 10
+
+    @staticmethod
+    def _chat_messages(message: str, history: list[dict], rag_context: str) -> list[dict]:
+        system_content = (
+            "Bạn là trợ lý AI luyện thi TOEIC/IELTS tại Việt Nam. "
+            "Trả lời thân thiện, dễ hiểu, theo phong cách thầy cô Việt. "
+            "Khi được cung cấp tài liệu tham khảo, hãy dựa vào đó để trả lời chính xác. "
+            "Nếu không có thông tin trong tài liệu, vẫn trả lời dựa trên kiến thức của bạn."
+        )
+        if rag_context:
+            system_content += f"\n\nTài liệu tham khảo:\n---\n{rag_context}\n---"
+        messages = [{"role": "system", "content": system_content}]
+        for h in history[-LLMService.CHAT_HISTORY_WINDOW:]:
+            if h.get("role") in ("user", "assistant") and h.get("content"):
+                messages.append({"role": h["role"], "content": h["content"]})
+        messages.append({"role": "user", "content": message})
+        return messages
+
+    def ensure_configured(self) -> None:
+        """Ném LLMNotConfiguredError sớm (trước khi mở stream)."""
+        if not self._use_finetuned:
+            self._client_and_model  # noqa: B018 - property raises when missing
+
     async def chat(
         self,
         message: str,
@@ -780,19 +807,7 @@ class LLMService:
         llm_provider: str | None = None,
     ) -> str:
         """Chat với RAG context. Dùng knowledge base để trả lời câu hỏi ngữ pháp/từ vựng TOEIC/IELTS."""
-        system_content = (
-            "Bạn là trợ lý AI luyện thi TOEIC/IELTS tại Việt Nam. "
-            "Trả lời thân thiện, dễ hiểu, theo phong cách thầy cô Việt. "
-            "Khi được cung cấp tài liệu tham khảo, hãy dựa vào đó để trả lời chính xác. "
-            "Nếu không có thông tin trong tài liệu, vẫn trả lời dựa trên kiến thức của bạn."
-        )
-        if rag_context:
-            system_content += f"\n\nTài liệu tham khảo:\n---\n{rag_context}\n---"
-
-        messages = [{"role": "system", "content": system_content}]
-        for h in history[-10:]:
-            messages.append({"role": h["role"], "content": h["content"]})
-        messages.append({"role": "user", "content": message})
+        messages = self._chat_messages(message, history, rag_context)
 
         if self._use_finetuned:
             prompt = "\n".join(
@@ -801,7 +816,7 @@ class LLMService:
             )
             async with llm_span("chat", get_settings().hf_model_name):
                 return await self._call_finetuned(
-                    prompt, max_tokens=1500, system_msg=system_content, provider_override=llm_provider
+                    prompt, max_tokens=1500, system_msg=messages[0]["content"], provider_override=llm_provider
                 )
 
         client, model = self._client_and_model
@@ -815,5 +830,35 @@ class LLMService:
             span.add_usage(getattr(response, "usage", None))
             return response.choices[0].message.content
 
+    async def chat_stream(
+        self,
+        message: str,
+        history: list[dict],
+        rag_context: str = "",
+        *,
+        llm_provider: str | None = None,
+    ):
+        """Như chat() nhưng trả về từng đoạn text (async generator)."""
+        if self._use_finetuned:
+            yield await self.chat(message, history, rag_context, llm_provider=llm_provider)
+            return
+
+        messages = self._chat_messages(message, history, rag_context)
+        client, model = self._client_and_model
+        async with llm_span("chat_stream", model):
+            stream = await client.chat.completions.create(
+                model=model,
+                messages=messages,
+                max_tokens=1500,
+                stream=True,
+                **self._sampling(0.7),
+            )
+            async for chunk in stream:
+                choices = getattr(chunk, "choices", None) or []
+                if not choices:
+                    continue
+                delta = getattr(choices[0].delta, "content", None)
+                if delta:
+                    yield delta
 
 llm_service = LLMService()

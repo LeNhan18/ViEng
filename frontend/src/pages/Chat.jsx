@@ -1,6 +1,6 @@
 import { useState, useRef, useEffect } from "react";
 import { useLocation } from "react-router-dom";
-import { chat, chatWithOcr, getChatHistory, clearChatHistory } from "../api";
+import { chat, chatStream, chatWithOcr, getChatHistory, clearChatHistory } from "../api";
 import {
   Send,
   Loader2,
@@ -136,6 +136,50 @@ export default function Chat() {
     performChatRequest(msgText, null, messages);
   }
 
+  // Gửi chat dạng streaming; backend cũ (không có /chat/stream) -> dùng /chat thường.
+  async function sendWithStreaming(text, history) {
+    const id = `a-${Date.now()}`;
+    // Cập nhật (hoặc tạo) bong bóng trả lời theo id; luôn dùng functional update để an toàn khi React gom batch.
+    const upsert = (fn) =>
+      setMessages((prev) => {
+        const base = prev.some((m) => m.id === id)
+          ? prev
+          : [...prev, { id, role: "assistant", content: "", sources: [] }];
+        return base.map((m) => (m.id === id ? { ...m, ...fn(m) } : m));
+      });
+
+    let metaSources = [];
+    try {
+      const final = await chatStream({
+        message: text,
+        history,
+        llmProvider,
+        // Giữ nguồn tới khi có chữ đầu tiên để không hiện bong bóng rỗng cạnh spinner.
+        onMeta: (meta) => {
+          metaSources = meta.sources || [];
+        },
+        onDelta: (delta) => {
+          setLoading(false);
+          upsert((m) => ({ content: m.content + delta, sources: metaSources }));
+        },
+      });
+      upsert(() => ({ content: final.message, sources: final.sources || [] }));
+    } catch (err) {
+      if (err.streamStarted) throw err;
+      if (err.status && err.status !== 404 && err.status !== 405) {
+        const e = new Error(err.detail || err.message);
+        e.response = { data: { detail: err.detail } };
+        throw e;
+      }
+      // Fallback: backend chưa có streaming
+      const data = await chat({ message: text, history, llmProvider });
+      setMessages((prev) => [
+        ...prev.filter((m) => m.id !== id),
+        { role: "assistant", content: data.message, sources: data.sources || [] },
+      ]);
+    }
+  }
+
   async function performChatRequest(text, fileSnapshot, priorMessages) {
     setLoading(true);
     try {
@@ -156,14 +200,10 @@ export default function Chat() {
         ]);
       } else {
         const history = priorMessages.map((m) => ({ role: m.role, content: m.content }));
-        const data = await chat({ message: text, history, llmProvider });
-        setMessages((prev) => [
-          ...prev,
-          { role: "assistant", content: data.message, sources: data.sources || [] },
-        ]);
+        await sendWithStreaming(text, history);
       }
     } catch (err) {
-      setError(err.response?.data?.detail || "Không thể gửi tin nhắn. Vui lòng thử lại.");
+      setError(err.response?.data?.detail || err.detail || "Không thể gửi tin nhắn. Vui lòng thử lại.");
     } finally {
       setLoading(false);
     }

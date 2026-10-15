@@ -117,3 +117,80 @@ export async function clearChatHistory() {
   const { data } = await api.delete("/chat/history");
   return data;
 }
+
+/**
+ * Chat dạng streaming (Server-Sent Events).
+ * onDelta(text) được gọi cho từng đoạn; trả về { message, sources } khi xong.
+ * Ném lỗi có .status khi HTTP lỗi, .streamStarted=true nếu lỗi xảy ra giữa chừng.
+ */
+export async function chatStream({ message, history, llmProvider, onDelta, onMeta, signal }) {
+  const headers = { "Content-Type": "application/json", Accept: "text/event-stream" };
+  const token = getToken();
+  if (token) headers.Authorization = `Bearer ${token}`;
+
+  const res = await fetch("/api/v1/chat/stream", {
+    method: "POST",
+    headers,
+    body: JSON.stringify({ message, history: history || [], llm_provider: llmProvider || undefined }),
+    signal,
+  });
+  if (!res.ok || !res.body) {
+    let detail = "";
+    try {
+      detail = (await res.json())?.detail || "";
+    } catch {
+      /* body không phải JSON */
+    }
+    const err = new Error(detail || `HTTP ${res.status}`);
+    err.status = res.status;
+    err.detail = detail;
+    throw err;
+  }
+
+  const reader = res.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = "";
+  let started = false;
+  let final = null;
+
+  const handle = (block) => {
+    let event = "message";
+    let data = "";
+    for (const line of block.split("\n")) {
+      if (line.startsWith("event: ")) event = line.slice(7).trim();
+      else if (line.startsWith("data: ")) data += line.slice(6);
+    }
+    if (!data) return;
+    const payload = JSON.parse(data);
+    if (event === "meta") onMeta?.(payload);
+    else if (event === "delta") {
+      started = true;
+      onDelta?.(payload.text);
+    } else if (event === "done") final = payload;
+    else if (event === "error") {
+      const err = new Error(payload.detail || "Stream error");
+      err.detail = payload.detail;
+      err.streamStarted = started;
+      throw err;
+    }
+  };
+
+  for (;;) {
+    const { value, done } = await reader.read();
+    if (done) break;
+    buffer += decoder.decode(value, { stream: true });
+    let idx;
+    while ((idx = buffer.indexOf("\n\n")) !== -1) {
+      const block = buffer.slice(0, idx);
+      buffer = buffer.slice(idx + 2);
+      handle(block);
+    }
+  }
+  if (buffer.trim()) handle(buffer);
+  if (!final) {
+    const err = new Error("Stream ended unexpectedly");
+    err.streamStarted = started;
+    throw err;
+  }
+  return final;
+}

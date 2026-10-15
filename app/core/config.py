@@ -38,6 +38,12 @@ class Settings(BaseSettings):
     # Bỏ qua RAG cho tin nhắn không cần tra cứu (chào hỏi...) khi P(cần tra cứu) < ngưỡng.
     jev_rag_gate: bool = True
     jev_rag_threshold: float = 0.3
+    # Cache kết quả TTS/dịch (Redis nếu USE_REDIS, nếu không thì RAM)
+    cache_enabled: bool = True
+    cache_memory_items: int = 512
+    tts_cache_ttl_s: int = 30 * 24 * 3600
+    translate_cache_ttl_s: int = 7 * 24 * 3600
+    tts_voice: str = "en-US-AriaNeural"
     # Số lần cho LLM tự sửa khi output sai schema/nghiệp vụ.
     llm_max_repairs: int = 2
 
@@ -47,8 +53,18 @@ class Settings(BaseSettings):
     langfuse_host: str = ""
 
     chroma_persist_dir: str = "./data/vectorstore"
-    embedding_model: str = "sentence-transformers/models--BAAI--bge-m3"
+    # Model id trên Hugging Face hoặc đường dẫn thư mục model local
+    embedding_model: str = "BAAI/bge-m3"
     rag_enabled: bool = True
+    # Hybrid retrieval: BM25 (từ khoá) + vector, gộp bằng Reciprocal Rank Fusion
+    rag_hybrid: bool = True
+    rag_fetch_k: int = 20
+    # Cross-encoder rerank (tuỳ chọn, cần sentence-transformers), vd. BAAI/bge-reranker-v2-m3
+    rag_reranker_model: str = ""
+    rag_chunk_size: int = 500
+    rag_chunk_overlap: int = 50
+    # Bảo vệ /rag/index: header X-Admin-Token. Trống = chỉ cho phép khi APP_ENV != production
+    admin_token: str = ""
 
     hf_model_name: str = ""
     use_finetuned_model: bool = False
@@ -63,6 +79,11 @@ class Settings(BaseSettings):
     # OCR (chat with image/PDF)
     ocr_enabled: bool = True
     ocr_max_file_size_mb: int = 10
+    ocr_max_pdf_pages: int = 10
+    # Thư mục file tạm khi OCR PDF (trống = thư mục tạm của hệ điều hành)
+    ocr_temp_dir: str = ""
+    # Thư mục cache model Paddle (trống = mặc định của Paddle). Vd: E:/AI_CACHE/paddle_ocr
+    ocr_model_cache_dir: str = ""
 
     # Auth (JWT)
     jwt_secret: str = "change-me"

@@ -5,6 +5,9 @@ metadata:
   namespace: vieng
   annotations:
     nginx.ingress.kubernetes.io/proxy-body-size: "20m"
+    # Chat streaming (SSE): không buffer, cho phép kết nối mở lâu
+    nginx.ingress.kubernetes.io/proxy-buffering: "off"
+    nginx.ingress.kubernetes.io/proxy-read-timeout: "300"
 spec:
   rules:
     - host: vieng.local

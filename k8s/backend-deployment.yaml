@@ -15,8 +15,8 @@ spec:
     spec:
       containers:
         - name: backend
-          # Đổi tag theo image bạn push lên GHCR
-          image: ghcr.io/LeNhan18/ViEng-backend:main
+          # GHCR chỉ chấp nhận tên viết thường (docker.yml đẩy ghcr.io/lenhan18/vieng-backend)
+          image: ghcr.io/lenhan18/vieng-backend:main
           imagePullPolicy: IfNotPresent
           ports:
             - containerPort: 8000
@@ -63,6 +63,26 @@ spec:
                   name: vieng-secrets
                   key: HF_MODEL_NAME
                   optional: true
+            - name: ADMIN_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: vieng-secrets
+                  key: ADMIN_TOKEN
+                  optional: true
+          resources:
+            requests:
+              cpu: "250m"
+              memory: "512Mi"
+            limits:
+              cpu: "2"
+              memory: "3Gi"
+          # Lần khởi động đầu có thể phải tải model/index: cho tối đa 5 phút trước khi liveness kiểm tra.
+          startupProbe:
+            httpGet:
+              path: /api/v1/health
+              port: 8000
+            periodSeconds: 10
+            failureThreshold: 30
           readinessProbe:
             httpGet:
               path: /api/v1/health
@@ -73,11 +93,12 @@ spec:
             httpGet:
               path: /api/v1/health
               port: 8000
-            initialDelaySeconds: 15
             periodSeconds: 20
           volumeMounts:
             - name: vectorstore
               mountPath: /app/data/vectorstore
       volumes:
+        # PVC: vectorstore không mất khi pod restart -> không phải index lại mỗi lần khởi động
         - name: vectorstore
-          emptyDir: {}
+          persistentVolumeClaim:
+            claimName: vieng-vectorstore

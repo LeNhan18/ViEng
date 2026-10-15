@@ -1,9 +1,11 @@
+import asyncio
 import json
 import re
+from contextlib import asynccontextmanager
 from pathlib import Path
-from fastapi import APIRouter, Body, Depends, File, Form, HTTPException, UploadFile
+from fastapi import APIRouter, Body, Depends, File, Form, Header, HTTPException, Query, UploadFile
 from fastapi.concurrency import run_in_threadpool
-from fastapi.responses import Response
+from fastapi.responses import Response, StreamingResponse
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -24,6 +26,7 @@ from app.services.llm_service import LLMNotConfiguredError, llm_service
 from app.services.ocr_service import OCRError, ocr_service
 from app.services.rag_service import rag_service
 from app.services.jev_service import jev_service
+from app.services.cache_service import cache_service, make_key
 from app.services.structured import StructuredOutputError
 from app.core.observability import stats as obs_stats
 from app.services.chat_memory_service import chat_memory_service
@@ -308,18 +311,32 @@ async def submit_answers(request: SubmitRequest):
 
 @router.post("/tts")
 async def text_to_speech(text: str = Body(..., embed=True, min_length=1, max_length=2000)):
-    """Chuyển text tiếng Anh thành audio (phát âm) — dùng Edge TTS miễn phí."""
+    """Chuyển text tiếng Anh thành audio (phát âm) — dùng Edge TTS miễn phí. Có cache."""
     try:
-        import edge_tts
-        communicate = edge_tts.Communicate(text.strip(), "en-US-AriaNeural")
-        audio_data = bytearray()
-        async for chunk in communicate.stream():
-            if chunk.get("type") == "audio":
-                audio_data.extend(chunk["data"])
+        settings = get_settings()
+        clean = " ".join(text.split())
+        key = make_key("tts", clean, settings.tts_voice)
+        audio = await cache_service.get_bytes("tts", key)
+        cached = audio is not None
+        if not cached:
+            import edge_tts
+
+            communicate = edge_tts.Communicate(clean, settings.tts_voice)
+            buf = bytearray()
+            async for chunk in communicate.stream():
+                if chunk.get("type") == "audio":
+                    buf.extend(chunk["data"])
+            audio = bytes(buf)
+            if audio:
+                await cache_service.set_bytes(key, audio, settings.tts_cache_ttl_s)
         return Response(
-            content=bytes(audio_data),
+            content=audio,
             media_type="audio/mpeg",
-            headers={"Content-Disposition": "inline; filename=speech.mp3"},
+            headers={
+                "Content-Disposition": "inline; filename=speech.mp3",
+                "Cache-Control": "public, max-age=86400",
+                "X-Cache": "HIT" if cached else "MISS",
+            },
         )
     except LLMNotConfiguredError:
         raise
@@ -330,22 +347,38 @@ async def text_to_speech(text: str = Body(..., embed=True, min_length=1, max_len
 
 @router.post("/translate", response_model=TranslateResponse)
 async def translate_text(request: TranslateRequest):
-    """Dịch thuật EN<->VI bằng AI, kết hợp RAG để tra cứu ngữ pháp/từ vựng liên quan."""
+    """Dịch thuật EN<->VI bằng AI, kết hợp RAG để tra cứu ngữ pháp/từ vựng liên quan. Có cache."""
     try:
-        rag_context = ""
-        if request.use_rag:
-            query = request.text[:200]
-            if request.direction.value == "en_to_vi":
-                query = f"grammar vocabulary {query}"
-            rag_context = rag_service.retrieve(query, k=3)
-
-        result = await llm_service.translate(
-            text=request.text,
-            direction=request.direction.value,
-            level=request.level.value,
-            rag_context=rag_context,
-            llm_provider=request.llm_provider,
+        settings = get_settings()
+        key = make_key(
+            "translate", request.text.strip(), request.direction.value, request.level.value,
+            request.use_rag, llm_service.model,
         )
+        cached = await cache_service.get_json("translate", key)
+        if cached is not None:
+            rag_context = cached.get("rag_context", "")
+            result = cached["result"]
+        else:
+            rag_context = ""
+            if request.use_rag:
+                query = request.text[:200]
+                if request.direction.value == "en_to_vi":
+                    query = f"grammar vocabulary {query}"
+                rag_context = await run_in_threadpool(rag_service.retrieve, query, 3)
+
+            result = await llm_service.translate(
+                text=request.text,
+                direction=request.direction.value,
+                level=request.level.value,
+                rag_context=rag_context,
+                llm_provider=request.llm_provider,
+            )
+            # Chỉ cache bản dịch đầy đủ (không cache bản fallback thiếu từ vựng/ngữ pháp).
+            if result.get("translated") and (result.get("vocabulary") or result.get("grammar_notes")):
+                await cache_service.set_json(
+                    key, {"result": result, "rag_context": (rag_context or "")[:500]},
+                    settings.translate_cache_ttl_s,
+                )
 
         return TranslateResponse(
             original=request.text,
@@ -362,6 +395,58 @@ async def translate_text(request: TranslateRequest):
         raise HTTPException(status_code=500, detail=_INTERNAL_ERROR)
 
 
+@asynccontextmanager
+async def _memory_session():
+    """Session DB cho chat memory (None khi USE_DATABASE=false)."""
+    if not get_settings().use_database:
+        yield None
+        return
+    from app.db.database import _get_engine_and_sessionmaker
+
+    _, session_factory = _get_engine_and_sessionmaker()
+    async with session_factory() as session:
+        yield session
+
+
+def _extract_sources(rag_context: str) -> list[str]:
+    sources: list[str] = []
+    for m in re.finditer(r"\[Nguồn: ([^\]]+)\]", rag_context or ""):
+        p = m.group(1).strip()
+        name = Path(p).name if "/" in p or "\\" in p else p
+        if name and name not in sources:
+            sources.append(name)
+    return sources[:5]
+
+
+async def _rag_for_chat(message: str) -> str:
+    """Jev quyết định có cần tra RAG không; chạy song song với RAG để không cộng dồn độ trễ."""
+    rag_task = asyncio.ensure_future(run_in_threadpool(rag_service.retrieve_mmr, message, 4, 10))
+    try:
+        need = await jev_service.needs_rag(message)
+    except Exception:  # noqa: BLE001 - jev đã fail-open, đây là phòng hờ
+        need = True
+    if not need:
+        rag_task.cancel()
+        return ""
+    try:
+        return await rag_task or ""
+    except Exception as e:  # noqa: BLE001 - RAG lỗi không chặn chat
+        logger.warning("RAG lỗi, bỏ qua context: {}", e)
+        return ""
+
+
+async def _prepare_chat(request: ChatRequest, user: User | None, db) -> tuple[list[dict], str, list[str]]:
+    history: list[dict] = []
+    if user:
+        history = await chat_memory_service.get_history(
+            user.id, db=db, limit=llm_service.CHAT_HISTORY_WINDOW
+        )
+    if not history:
+        history = [{"role": h.role, "content": h.content} for h in request.history]
+    rag_context = await _rag_for_chat(request.message)
+    return history, rag_context, _extract_sources(rag_context)
+
+
 @router.post("/chat", response_model=ChatResponse)
 async def chat(
     request: ChatRequest,
@@ -369,75 +454,67 @@ async def chat(
 ):
     """Chatbot RAG + LLM: trả lời câu hỏi ngữ pháp/từ vựng TOEIC/IELTS dựa trên knowledge base."""
     try:
-        settings = get_settings()
-        db = None
-        db_context = None
-        if settings.use_database:
-            from app.db.database import _get_engine_and_sessionmaker
-            _, session_factory = _get_engine_and_sessionmaker()
-            db_context = session_factory()
-            db = await db_context.__aenter__()
-
-        try:
-            # 1. Tải lịch sử chat từ memory service nếu user đã đăng nhập
-            history = []
-            if user:
-                history = await chat_memory_service.get_history(user.id, db=db)
-
-            # Nếu không có lịch sử trong memory (chưa đăng nhập hoặc là chat đầu tiên), dùng history từ request gửi lên
-            if not history:
-                history = [{"role": h.role, "content": h.content} for h in request.history]
-
-            # 2. Lưu tin nhắn mới của user vào memory nếu đã đăng nhập
-            if user:
-                await chat_memory_service.add_message(
-                    user_id=user.id,
-                    role="user",
-                    content=request.message,
-                    db=db
-                )
-
-            # 3. Truy xuất RAG context (Jev quyết định có cần tra cứu không; chạy ngoài event loop)
-            rag_context = ""
-            if await jev_service.needs_rag(request.message):
-                rag_context = await run_in_threadpool(rag_service.retrieve_mmr, request.message, 4, 10)
-            sources = []
-            for m in re.finditer(r"\[Nguồn: ([^\]]+)\]", rag_context or ""):
-                p = m.group(1).strip()
-                name = Path(p).name if "/" in p or "\\" in p else p
-                if name and name not in sources:
-                    sources.append(name)
-            sources = sources[:5]
-
-            # 4. Gọi LLM để sinh câu trả lời
+        async with _memory_session() as db:
+            history, rag_context, sources = await _prepare_chat(request, user, db)
             reply = await llm_service.chat(
                 message=request.message,
                 history=history,
                 rag_context=rag_context,
                 llm_provider=request.llm_provider,
             )
-
-            # 5. Lưu câu trả lời của AI vào memory nếu đã đăng nhập
+            # Chỉ lưu khi LLM trả lời thành công: không để lại câu hỏi "mồ côi" trong lịch sử.
             if user:
-                await chat_memory_service.add_message(
-                    user_id=user.id,
-                    role="assistant",
-                    content=reply,
-                    sources=sources,
-                    db=db
-                )
-
+                await chat_memory_service.save_turn(user.id, request.message, reply, sources, db=db)
             return ChatResponse(message=reply, sources=sources)
-
-        finally:
-            if db_context:
-                await db_context.__aexit__(None, None, None)
-
     except LLMNotConfiguredError:
         raise
     except Exception as e:
         logger.exception("Error in chat: {}", e)
         raise HTTPException(status_code=500, detail=_INTERNAL_ERROR)
+
+
+def _sse(event: str, data: dict) -> str:
+    return f"event: {event}\ndata: {json.dumps(data, ensure_ascii=False)}\n\n"
+
+
+@router.post("/chat/stream")
+async def chat_stream(
+    request: ChatRequest,
+    user: User | None = Depends(_get_current_user_optional),
+):
+    """Như /chat nhưng trả lời dạng Server-Sent Events.
+
+    Sự kiện: `meta` {sources} -> nhiều `delta` {text} -> `done` {message, sources} | `error` {detail}.
+    """
+    llm_service.ensure_configured()  # thiếu key -> 503 trước khi mở stream
+
+    async def events():
+        try:
+            async with _memory_session() as db:
+                history, rag_context, sources = await _prepare_chat(request, user, db)
+                yield _sse("meta", {"sources": sources})
+                parts: list[str] = []
+                async for delta in llm_service.chat_stream(
+                    message=request.message,
+                    history=history,
+                    rag_context=rag_context,
+                    llm_provider=request.llm_provider,
+                ):
+                    parts.append(delta)
+                    yield _sse("delta", {"text": delta})
+                reply = "".join(parts)
+                if user and reply:
+                    await chat_memory_service.save_turn(user.id, request.message, reply, sources, db=db)
+                yield _sse("done", {"message": reply, "sources": sources})
+        except Exception as e:  # noqa: BLE001 - báo lỗi trong stream, không lộ chi tiết
+            logger.exception("Error in chat_stream: {}", e)
+            yield _sse("error", {"detail": _INTERNAL_ERROR})
+
+    return StreamingResponse(
+        events(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
 
 
 _OCR_USER_PROMPT_TEMPLATE = (
@@ -518,14 +595,8 @@ async def chat_with_ocr(
 
     try:
         # RAG truy vấn theo câu hỏi của user, không cần dùng toàn bộ văn bản OCR.
-        rag_context = rag_service.retrieve_mmr(user_question, k=4, fetch_k=10)
-        sources: list[str] = []
-        for m in re.finditer(r"\[Nguồn: ([^\]]+)\]", rag_context or ""):
-            p = m.group(1).strip()
-            name = Path(p).name if "/" in p or "\\" in p else p
-            if name and name not in sources:
-                sources.append(name)
-        sources = sources[:5]
+        rag_context = await run_in_threadpool(rag_service.retrieve_mmr, user_question, 4, 10)
+        sources = _extract_sources(rag_context)
 
         reply = await llm_service.chat(
             message=composed_message,
@@ -536,34 +607,10 @@ async def chat_with_ocr(
 
         # Lưu tin nhắn và phản hồi vào memory nếu user đã đăng nhập
         if user:
-            settings = get_settings()
-            db = None
-            db_context = None
-            if settings.use_database:
-                from app.db.database import _get_engine_and_sessionmaker
-                _, session_factory = _get_engine_and_sessionmaker()
-                db_context = session_factory()
-                db = await db_context.__aenter__()
-            try:
-                user_msg_content = message.strip() or "(đã gửi file)"
-                # Lưu câu hỏi của user
-                await chat_memory_service.add_message(
-                    user_id=user.id,
-                    role="user",
-                    content=user_msg_content,
-                    db=db
+            async with _memory_session() as db:
+                await chat_memory_service.save_turn(
+                    user.id, message.strip() or "(đã gửi file)", reply, sources, db=db
                 )
-                # Lưu câu trả lời của AI
-                await chat_memory_service.add_message(
-                    user_id=user.id,
-                    role="assistant",
-                    content=reply,
-                    sources=sources,
-                    db=db
-                )
-            finally:
-                if db_context:
-                    await db_context.__aexit__(None, None, None)
 
         return OcrChatResponse(
             message=reply,
@@ -605,43 +652,75 @@ async def ocr_only(file: UploadFile = File(...)):
     return {"file_name": file.filename or "", "extracted_text": extracted}
 
 
-@router.post("/rag/index")
-async def index_knowledge_base():
-    """Index lại toàn bộ knowledge base vào vectorstore."""
-    count = rag_service.index_knowledge_base()
-    if count == 0:
-        return {"message": "Không tìm thấy tài liệu. Thêm file .txt vào data/knowledge_base/"}
-    return {"message": f"Đã index {count} chunks vào vectorstore"}
+_index_state: dict = {"status": "idle", "chunks": None, "started_at": None, "finished_at": None, "error": None}
+_index_lock = asyncio.Lock()
+
+
+def _require_admin(x_admin_token: str | None) -> None:
+    settings = get_settings()
+    if settings.admin_token:
+        if x_admin_token != settings.admin_token:
+            raise HTTPException(status_code=403, detail="Admin token không hợp lệ.")
+    elif settings.app_env.lower() == "production":
+        raise HTTPException(status_code=403, detail="Cần cấu hình ADMIN_TOKEN để index trên production.")
+
+
+async def _run_index() -> None:
+    import time
+
+    _index_state.update(status="running", chunks=None, error=None, started_at=time.time(), finished_at=None)
+    try:
+        count = await run_in_threadpool(rag_service.index_knowledge_base)
+        _index_state.update(status="done", chunks=count)
+    except Exception as e:  # noqa: BLE001
+        logger.exception("Index knowledge base lỗi: {}", e)
+        _index_state.update(status="error", error=type(e).__name__)
+    finally:
+        _index_state["finished_at"] = time.time()
+
+
+@router.post("/rag/index", status_code=202)
+async def index_knowledge_base(x_admin_token: str | None = Header(None)):
+    """Index lại knowledge base ở chế độ nền (không chặn server). Xem tiến độ: GET /rag/index/status."""
+    _require_admin(x_admin_token)
+    async with _index_lock:
+        if _index_state["status"] == "running":
+            raise HTTPException(status_code=409, detail="Đang index, vui lòng chờ.")
+        _index_state["status"] = "running"
+        asyncio.create_task(_run_index())
+    return {"status": "started", "message": "Đang index knowledge base ở chế độ nền."}
+
+
+@router.get("/rag/index/status")
+async def index_status():
+    return dict(_index_state)
 
 
 @router.get("/rag/list")
-async def list_vectorstore(limit: int = 20, offset: int = 0):
-    """Liệt kê các chunks trong vectorstore (để xem nội dung đã index)."""
+async def list_vectorstore(limit: int = Query(20, ge=1, le=200), offset: int = Query(0, ge=0)):
+    """Liệt kê các chunks trong vectorstore (phân trang ở phía Chroma, không tải toàn bộ)."""
     try:
-        vs = rag_service._get_vectorstore()
+        vs = await run_in_threadpool(rag_service._get_vectorstore)
         if vs is None:
             return {"chunks": [], "total": 0, "message": "Vectorstore chưa được tạo."}
         try:
             collection = vs._collection
-            data = collection.get(include=["documents", "metadatas"])
+            total = collection.count()
+            data = collection.get(include=["documents", "metadatas"], limit=limit, offset=offset)
         except Exception as inner:
             logger.warning("Không đọc được collection nội bộ Chroma: {}", inner)
             return {
                 "chunks": [],
                 "total": 0,
-                "message": (
-                    "Kh\u00f4ng li\u1ec7t k\u00ea \u0111\u01b0\u1ee3c vectorstore "
-                    "(phi\u00ean b\u1ea3n Chroma ho\u1eb7c l\u1ed7i truy c\u1eadp)."
-                ),
+                "message": "Không liệt kê được vectorstore (phiên bản Chroma hoặc lỗi truy cập).",
             }
         docs = data.get("documents") or []
         metas = data.get("metadatas") or [{}] * len(docs)
-        total = len(docs)
         chunks = []
-        for i, (d, m) in enumerate(zip(docs[offset : offset + limit], metas[offset : offset + limit])):
-            src = m.get("source") or "N/A"
-            if isinstance(src, str) and "/" in src:
-                src = src.split("/")[-1].split("\\")[-1]
+        for i, (d, m) in enumerate(zip(docs, metas)):
+            src = (m or {}).get("source") or "N/A"
+            if isinstance(src, str):
+                src = src.replace("\\", "/").split("/")[-1]
             chunks.append({
                 "index": offset + i + 1,
                 "source": src,
@@ -649,8 +728,6 @@ async def list_vectorstore(limit: int = 20, offset: int = 0):
                 "length": len(d),
             })
         return {"chunks": chunks, "total": total, "limit": limit, "offset": offset}
-    except LLMNotConfiguredError:
-        raise
     except Exception as e:
         logger.exception("Error listing vectorstore: {}", e)
         raise HTTPException(status_code=500, detail=_INTERNAL_ERROR)
@@ -659,7 +736,7 @@ async def list_vectorstore(limit: int = 20, offset: int = 0):
 @router.post("/rag/search")
 async def search_knowledge(query: str):
     """Tìm kiếm trong knowledge base."""
-    context = rag_service.retrieve(query)
+    context = await run_in_threadpool(rag_service.retrieve, query)
     if not context:
         return {"results": [], "message": "Không tìm thấy kết quả hoặc vectorstore chưa được tạo."}
     return {"results": context}
@@ -676,24 +753,11 @@ async def db_status(db: AsyncSession = Depends(get_db)):
 async def get_chat_history(
     user: User = Depends(_get_current_user),
 ):
-    """Lấy lịch sử chat của user."""
+    """Lấy lịch sử chat của user (tối đa 100 tin gần nhất)."""
     try:
-        settings = get_settings()
-        db = None
-        db_context = None
-        if settings.use_database:
-            from app.db.database import _get_engine_and_sessionmaker
-            _, session_factory = _get_engine_and_sessionmaker()
-            db_context = session_factory()
-            db = await db_context.__aenter__()
-        try:
+        async with _memory_session() as db:
             history = await chat_memory_service.get_history(user.id, db=db)
-            return [ChatMessage(role=m["role"], content=m["content"]) for m in history]
-        finally:
-            if db_context:
-                await db_context.__aexit__(None, None, None)
-    except LLMNotConfiguredError:
-        raise
+        return [ChatMessage(role=m["role"], content=m["content"]) for m in history]
     except Exception as e:
         logger.exception("Error in get_chat_history: {}", e)
         raise HTTPException(status_code=500, detail=_INTERNAL_ERROR)
@@ -705,22 +769,9 @@ async def delete_chat_history(
 ):
     """Xóa lịch sử chat của user."""
     try:
-        settings = get_settings()
-        db = None
-        db_context = None
-        if settings.use_database:
-            from app.db.database import _get_engine_and_sessionmaker
-            _, session_factory = _get_engine_and_sessionmaker()
-            db_context = session_factory()
-            db = await db_context.__aenter__()
-        try:
+        async with _memory_session() as db:
             await chat_memory_service.clear_history(user.id, db=db)
-            return {"status": "ok", "message": "Lịch sử chat đã được xóa."}
-        finally:
-            if db_context:
-                await db_context.__aexit__(None, None, None)
-    except LLMNotConfiguredError:
-        raise
+        return {"status": "ok", "message": "Lịch sử chat đã được xóa."}
     except Exception as e:
         logger.exception("Error in delete_chat_history: {}", e)
         raise HTTPException(status_code=500, detail=_INTERNAL_ERROR)
