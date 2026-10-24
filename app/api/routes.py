@@ -1,10 +1,12 @@
 import json
 import re
+import secrets
 from pathlib import Path
 from fastapi import APIRouter, Body, Depends, File, Form, HTTPException, UploadFile
 from fastapi.concurrency import run_in_threadpool
 from fastapi.responses import Response
-from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
+from fastapi.responses import JSONResponse
+from fastapi.security import APIKeyHeader, HTTPAuthorizationCredentials, HTTPBearer
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
@@ -22,7 +24,7 @@ from app.db.database import get_db
 from app.models.orm import User
 from app.services.llm_service import LLMNotConfiguredError, llm_service
 from app.services.ocr_service import OCRError, ocr_service
-from app.services.rag_service import rag_service
+from app.services.rag_service import RagStatus, rag_service
 from app.services.structured import StructuredOutputError
 from app.core.observability import stats as obs_stats
 from app.services.chat_memory_service import chat_memory_service
@@ -53,6 +55,54 @@ def _clean_json(raw: str) -> str:
 @router.get("/health")
 async def health_check():
     return {"status": "ok", "message": "ViEng API is running"}
+
+
+@router.get("/health/ready")
+async def readiness_check():
+    """Readiness cho k8s/Docker: phản ánh tình trạng embedding/index của RAG.
+
+    RAG tắt chủ động (RAG_ENABLED=false) vẫn là ready — app chạy ở chế độ lite.
+    RAG bật nhưng embedder/index chưa sẵn sàng thì trả 503 kèm lý do cụ thể,
+    thay vì "ok" giả rồi mọi câu trả lời đều thiếu căn cứ.
+    """
+    rag = rag_service.status()
+    lite_mode = not rag["enabled"]
+    ready = lite_mode or bool(rag["ready"])
+    body = {
+        "status": "ready" if ready else "not_ready",
+        "mode": "lite" if lite_mode else "rag",
+        "checks": {
+            "rag": {
+                "status": rag["status"],
+                "embedder": rag["embedder"],
+                "index_present": rag["index"]["present"],
+            }
+        },
+    }
+    if ready:
+        return body
+    return JSONResponse(status_code=503, content=body)
+
+
+_admin_key_header = APIKeyHeader(name="X-Admin-Key", auto_error=False)
+
+
+async def _require_admin(admin_key: str | None = Depends(_admin_key_header)) -> None:
+    """Chặn các thao tác quản trị index / xem kho tài liệu.
+
+    Fail-closed: ADMIN_API_KEY để trống nghĩa là chưa cấu hình quản trị, và các
+    endpoint này bị chặn hoàn toàn — không phải mở cho mọi người.
+    """
+    expected = (get_settings().admin_api_key or "").strip()
+    if not expected:
+        raise HTTPException(
+            status_code=503,
+            detail=(
+                "Thao tác quản trị chưa được cấu hình (ADMIN_API_KEY trống)."
+            ),
+        )
+    if not admin_key or not secrets.compare_digest(admin_key, expected):
+        raise HTTPException(status_code=403, detail="Yêu cầu khoá quản trị hợp lệ.")
 
 
 @router.get("/metrics")
@@ -602,16 +652,53 @@ async def ocr_only(file: UploadFile = File(...)):
     return {"file_name": file.filename or "", "extracted_text": extracted}
 
 
-@router.post("/rag/index")
+@router.post("/rag/index", dependencies=[Depends(_require_admin)])
 async def index_knowledge_base():
-    """Index lại toàn bộ knowledge base vào vectorstore."""
-    count = rag_service.index_knowledge_base()
+    """Index lại knowledge base: build index mới, verify, rồi swap.
+
+    Chạy trong threadpool vì build embedding là sync và nặng — gọi trực tiếp
+    trong endpoint async sẽ block event loop và làm mọi request khác treo.
+    Index đang chạy chỉ bị thay khi bản mới verify xong.
+    """
+    try:
+        count = await run_in_threadpool(rag_service.index_knowledge_base)
+    except RuntimeError as e:
+        # reindex khác đang chạy, hoặc embedder không khả dụng
+        raise HTTPException(status_code=409, detail=str(e))
+    except Exception as e:
+        logger.exception("Reindex lỗi: {}", e)
+        raise HTTPException(
+            status_code=500,
+            detail="Reindex thất bại; index cũ được giữ nguyên. Xem log để biết chi tiết.",
+        )
     if count == 0:
-        return {"message": "Không tìm thấy tài liệu. Thêm file .txt vào data/knowledge_base/"}
-    return {"message": f"Đã index {count} chunks vào vectorstore"}
+        return {
+            "indexed_chunks": 0,
+            "message": "Không tìm thấy tài liệu. Thêm file .txt/.pdf vào data/knowledge_base/",
+        }
+    return {
+        "indexed_chunks": count,
+        "message": f"Đã index {count} chunks vào vectorstore",
+    }
 
 
-@router.get("/rag/list")
+@router.get("/rag/status", dependencies=[Depends(_require_admin)])
+async def rag_status():
+    """Trạng thái chi tiết của RAG: embedder, index version, lỗi gần nhất."""
+    return rag_service.status()
+
+
+@router.post("/rag/rollback", dependencies=[Depends(_require_admin)])
+async def rag_rollback(version: str = Body("", embed=True)):
+    """Quay index về một version cũ (mặc định: bản ngay trước bản đang dùng)."""
+    try:
+        activated = await run_in_threadpool(rag_service.rollback, version)
+    except RuntimeError as e:
+        raise HTTPException(status_code=409, detail=str(e))
+    return {"active_version": activated, "message": f"Đã quay về index version {activated}"}
+
+
+@router.get("/rag/list", dependencies=[Depends(_require_admin)])
 async def list_vectorstore(limit: int = 20, offset: int = 0):
     """Liệt kê các chunks trong vectorstore (để xem nội dung đã index)."""
     try:
@@ -653,13 +740,42 @@ async def list_vectorstore(limit: int = 20, offset: int = 0):
         raise HTTPException(status_code=500, detail=_INTERNAL_ERROR)
 
 
+_RAG_STATUS_MESSAGES = {
+    RagStatus.DISABLED: "RAG đang tắt (RAG_ENABLED=false).",
+    RagStatus.EMBEDDER_UNAVAILABLE: "Embedding model không khả dụng.",
+    RagStatus.INDEX_NOT_READY: "Vectorstore chưa được tạo — hãy chạy POST /rag/index.",
+    RagStatus.RETRIEVAL_ERROR: "Lỗi khi truy xuất vectorstore.",
+    RagStatus.NO_EVIDENCE: "Không tìm thấy tài liệu nào khớp truy vấn.",
+    RagStatus.OK: "",
+}
+
+
 @router.post("/rag/search")
 async def search_knowledge(query: str):
-    """Tìm kiếm trong knowledge base."""
-    context = rag_service.retrieve(query)
-    if not context:
-        return {"results": [], "message": "Không tìm thấy kết quả hoặc vectorstore chưa được tạo."}
-    return {"results": context}
+    """Tìm kiếm trong knowledge base.
+
+    Trả về `status` để phân biệt rõ bốn tình huống từng bị gộp thành "rỗng":
+    RAG tắt, index chưa sẵn sàng, không có bằng chứng khớp, và lỗi truy xuất.
+    """
+    result = await run_in_threadpool(rag_service.retrieve_detailed, query, 5)
+    payload = {
+        "status": result.status.value,
+        "message": _RAG_STATUS_MESSAGES.get(result.status, ""),
+        "detail": result.detail,
+        "num_results": len(result.documents),
+        "results": result.context,
+        "sources": [
+            {
+                "source": doc.metadata.get("source", "N/A"),
+                "page": doc.metadata.get("page"),
+            }
+            for doc, _ in result.documents
+        ],
+    }
+    if result.degraded:
+        # Hệ thống đang hỏng, không phải "không có kết quả" -> đừng trả 200.
+        return JSONResponse(status_code=503, content=payload)
+    return payload
 
 
 @router.get("/db/status")

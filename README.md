@@ -205,8 +205,15 @@ cp .env.example .env
 | `USE_REDIS` | Enable Redis/Redict session caching | `false` |
 | `REDIS_HOST` | Redis host address | `127.0.0.1` |
 | `REDIS_PORT` | Redis server port | `6379` |
-| `PADDLE_PDX_CACHE_HOME` | Model download cache folder for PaddleX/OCR | `E:\AI_CACHE\paddle_ocr` |
-| `TEMP` / `TMP` | Temporary directory redirection for PaddleX extractions | `E:\AI_CACHE\paddle_ocr\temp` |
+| `RAG_ENABLED` | Enable the RAG pipeline (`false` = lite mode, app runs without RAG) | `true` |
+| `CHROMA_PERSIST_DIR` | Vector store root (holds `CURRENT` + `versions/`) | `./data/vectorstore` |
+| `EMBEDDING_MODEL` | HuggingFace **repo id** of the embedding model (not a cache path) | `BAAI/bge-m3` |
+| `RAG_KEEP_OLD_INDEXES` | How many previous index versions to keep for rollback | `1` |
+| `ADMIN_API_KEY` | Key for admin RAG endpoints, sent as `X-Admin-Key`. Empty = those endpoints are blocked | |
+| `CACHE_DIR` | Root for model/temp caches; subfolders derived from it | `./data/cache` |
+| `OCR_TEMP_DIR` | Override OCR temp directory | *(derived)* |
+| `PADDLE_CACHE_DIR` | Override PaddleX model cache | *(derived)* |
+| `HF_CACHE_DIR` | Override HuggingFace cache (respects `HF_HOME` if already set) | *(derived)* |
 
 ---
 
@@ -241,12 +248,16 @@ pip install paddlepaddle-gpu==3.0.0 -i https://www.paddlepaddle.org.cn/packages/
 ```
 
 ### Cache Redirection
-PaddleX downloads several gigabytes of official models (layout detectors, table structurers, formula recognizers). Since Windows system drives (C:) often run out of space, the application automatically redirects all downloads and temp extractions to the **E:** drive (or any custom path specified in `.env`):
+PaddleX downloads several gigabytes of official models (layout detectors, table structurers, formula recognizers), so the cache location is configurable rather than hard-coded.
+
+By default everything lands under `./data/cache` (`ocr/temp`, `paddle`, `huggingface`), which works unchanged on Windows, Linux and inside Docker. To move the cache onto another drive or volume, set any of these in `.env` — use a path valid for **the OS you are running on**:
 ```env
-PADDLE_PDX_CACHE_HOME=E:\AI_CACHE\paddle_ocr
-TEMP=E:\AI_CACHE\paddle_ocr\temp
-TMP=E:\AI_CACHE\paddle_ocr\temp
+CACHE_DIR=./data/cache      # gốc cache; các thư mục con suy ra từ đây
+# OCR_TEMP_DIR=             # ghi đè riêng thư mục temp của OCR
+# PADDLE_CACHE_DIR=         # ghi đè riêng cache PaddleX
+# HF_CACHE_DIR=             # ghi đè riêng cache HuggingFace (tôn trọng HF_HOME nếu đã đặt)
 ```
+If the configured directory cannot be written (e.g. a read-only volume), the app falls back to the OS temp directory and logs a warning instead of failing the request.
 
 ---
 
@@ -256,7 +267,8 @@ All backend APIs are prefixed with `/api/v1`.
 
 | Method | Endpoint | Description | Auth Required |
 | :--- | :--- | :--- | :---: |
-| `GET` | `/health` | Kiểm tra trạng thái hoạt động của server | No |
+| `GET` | `/health` | Liveness: server còn sống | No |
+| `GET` | `/health/ready` | Readiness: 200 khi sẵn sàng (lite mode hoặc RAG đã có index), **503** kèm lý do khi RAG bật mà embedder/index chưa sẵn sàng | No |
 | `POST` | `/auth/register` | Đăng ký tài khoản người dùng mới | No |
 | `POST` | `/auth/login` | Đăng nhập hệ thống và nhận Bearer JWT token | No |
 | `GET` | `/auth/me` | Lấy thông tin tài khoản người dùng hiện tại | Yes |
@@ -269,8 +281,14 @@ All backend APIs are prefixed with `/api/v1`.
 | `POST` | `/ocr` | Chỉ chạy OCR trích xuất văn bản từ PDF/ảnh (debug) | No |
 | `POST` | `/translate` | Dịch song ngữ EN-VI kèm trích xuất từ vựng & ngữ pháp | No |
 | `POST` | `/tts` | Phát âm văn bản tiếng Anh bằng giọng đọc máy (Edge TTS) | No |
-| `POST` | `/rag/index` | Quét và index các tài liệu PDF/TXT cục bộ vào cơ sở dữ liệu ChromaDB | No |
-| `GET` | `/rag/list` | Liệt kê danh sách các chunk dữ liệu đã được index trong ChromaDB | No |
+| `POST` | `/rag/search` | Tìm trong knowledge base; trả `status` phân biệt rõ *RAG tắt / index chưa sẵn sàng / không có bằng chứng / lỗi truy xuất* | No |
+| `POST` | `/rag/index` | Build index mới từ tài liệu PDF/TXT, verify rồi mới chuyển sang dùng | **Admin** |
+| `GET` | `/rag/status` | Trạng thái RAG: embedder, index version, lỗi gần nhất | **Admin** |
+| `GET` | `/rag/list` | Liệt kê các chunk đã index | **Admin** |
+| `POST` | `/rag/rollback` | Quay index về một version cũ | **Admin** |
+
+**Admin** endpoints require the header `X-Admin-Key` matching `ADMIN_API_KEY` in `.env`.
+If `ADMIN_API_KEY` is empty these endpoints are blocked entirely (fail-closed, `503`) rather than left open.
 
 ---
 
@@ -278,11 +296,33 @@ All backend APIs are prefixed with `/api/v1`.
 
 To populate the RAG vector store with custom study material:
 1. Place `.txt` (grammar rules, test tips) or `.pdf` (textbooks, scanned exams) files into `data/knowledge_base/`.
-2. Run the ingestion endpoint:
+2. Run the ingestion endpoint (admin key required):
    ```bash
-   curl -X POST http://localhost:8000/api/v1/rag/index
+   curl -X POST http://localhost:8000/api/v1/rag/index -H "X-Admin-Key: $ADMIN_API_KEY"
    ```
 3. During indexing, `.pdf` files are parsed using the **PP-StructureV3 GPU pipeline** which converts tables, formulas, and layouts into clean Markdown pages, splitting them indexable chunk-by-chunk for the ChromaDB store.
+
+### Versioned indexes & rollback
+
+Indexing never overwrites the index that is currently serving traffic. A rebuild writes a **new version** under `CHROMA_PERSIST_DIR`, verifies it (chunk count plus a real query), and only then moves the `CURRENT` pointer:
+
+```
+data/vectorstore/
+├── CURRENT                 # tên version đang dùng
+└── versions/
+    ├── 20261024-101500/    # bản cũ, giữ lại để rollback
+    └── 20261024-143000/    # bản đang dùng
+```
+
+- A failed build leaves the live index untouched; the half-built version is marked `.incomplete` and cleaned up on a later run.
+- `RAG_KEEP_OLD_INDEXES` (default `1`) controls how many previous versions are kept.
+- `POST /rag/rollback` switches back to the previous version (or a named one).
+- Indexes created before this layout existed keep working in place and migrate on the next rebuild.
+
+To verify the whole pipeline end-to-end against a real ChromaDB store (requires `requirements.txt`, not the lite set):
+```bash
+PYTHONPATH=. python scripts/verify_rag_pipeline.py
+```
 
 ---
 
