@@ -135,6 +135,34 @@ persistence **thật**: index lần đầu → truy xuất đúng tài liệu �
 reindex lỗi giữ nguyên index cũ → sống sót qua "restart" → prune đúng số version
 → rollback → reindex lỗi không làm hỏng lần sau.
 
+### BLOCKER — không push được
+
+`git push origin automation/vieng-rag` bị git proxy từ chối:
+
+```
+access denied by the git proxy: LeNhan18/ViEng is not in this session's
+authorized repository set
+```
+
+Hai commit chỉ nằm **local** trong container tạm của phiên chạy, nên đã được
+xuất ra để không mất:
+
+- `0001-cross-platform-cache-paths.patch`
+- `0002-rag-states-versioned-reindex.patch`
+- `vieng-rag-automation.bundle` (git bundle, chứa cả nhánh)
+
+Áp lại:
+
+```bash
+git checkout -b automation/vieng-rag cd454d0
+git am 0001-cross-platform-cache-paths.patch 0002-rag-states-versioned-reindex.patch
+# hoặc:
+git fetch /path/to/vieng-rag-automation.bundle automation/vieng-rag:automation/vieng-rag
+```
+
+Để lần chạy sau push và mở draft PR được, cần thêm `LeNhan18/ViEng` vào
+*sources* của phiên (authorized repository set). Chưa có PR nào được tạo.
+
 ### Phần CHƯA xác minh / điểm cần lưu ý
 
 - **Embedding model thật chưa chạy được ở đây**: `huggingface.co` bị chặn egress
