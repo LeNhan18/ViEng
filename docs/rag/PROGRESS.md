@@ -311,6 +311,79 @@ không cần reindex.
 
 ---
 
+## Dựng lại nhánh ở một phiên chạy mới (vì chưa push được)
+
+`main` trên GitHub vẫn ở `cd454d0`; nhánh `automation/vieng-rag` **chỉ tồn tại
+dưới dạng patch lưu trong project doc**. Mỗi phiên chạy mới bắt đầu bằng việc
+dựng lại nhánh:
+
+```bash
+git clone https://github.com/LeNhan18/ViEng.git && cd ViEng
+git checkout -b automation/vieng-rag cd454d0
+# đọc 4 project doc claude/rag/000{1,2,3,4}-*.patch.eol, ghi ra đĩa, rồi:
+for f in 0001 0002 0003 0004; do sed 's/.$//' $f.patch.eol > $f.patch; done
+git am 0001.patch 0002.patch 0003.patch 0004.patch
+```
+
+**Vì sao là `.patch.eol` chứ không phải `.patch`**: patch chứa những dòng context
+có **khoảng trắng ở cuối dòng** (ví dụ một dòng trong `rag_service.py` có 16 dấu
+cách cuối dòng). Khi nội dung doc được ghi ra file bởi một tác nhân/trình soạn
+thảo, khoảng trắng cuối dòng rất dễ bị cắt, và lúc đó `git am` fail — kể cả với
+`--ignore-whitespace` hay `-3` (đã thử, **không cứu được**: dòng bị cắt là dòng
+*xoá*, không phải context).
+
+Cách chống: mỗi dòng trong file `.patch.eol` được thêm ký tự `|` ở cuối, nên
+khoảng trắng cuối dòng trở thành ký tự *ở giữa* dòng và không bị cắt. Giải mã là
+`sed 's/.$//'` (bỏ đúng một ký tự cuối mỗi dòng).
+
+Kiểm chứng (phiên #2): giải mã 4 file → `cmp` byte-identical với patch gốc →
+`git am` sạch → **tree của nhánh dựng lại giống hệt tree gốc**
+(`976218b2c657963b5e2a3a78650dd03d039c097e`). Hash commit khác vì `git am` đặt
+committer date mới; nội dung không đổi.
+
+### Tự kiểm tra file đã ghi ra đĩa
+
+Không đưa md5 vào file này: md5 của patch đổi mỗi lần series đổi số lượng commit
+(header `[PATCH n/m]`), nên bảng md5 nằm trong repo sẽ luôn lỗi thời. Manifest
+md5 của đúng bộ patch đang lưu nằm ở project doc **`claude/rag/RESTORE.md`**,
+được ghi lại sau mỗi phiên chạy.
+
+md5 không khớp = file ghi ra đĩa bị sai byte; đọc lại doc và ghi lại, đừng sửa
+code để "cho patch áp được".
+
+### Bản dự phòng: git bundle
+
+`claude/rag/vieng-rag-bundle-base64.txt` là `git bundle` của
+`cd454d0..automation/vieng-rag` đã base64 (`base64 -w 100`). Base64 không có
+khoảng trắng cuối dòng nên an toàn khi sao chép lại, chỉ tốn token vì dài.
+
+```bash
+tr -d '[:space:]' < doc.b64 | base64 -d > vieng-rag.bundle
+git bundle verify vieng-rag.bundle
+git fetch vieng-rag.bundle automation/vieng-rag:automation/vieng-rag
+```
+
+Bundle giữ **đúng hash commit gốc** (`0418e00`). Đã kiểm chứng round-trip qua
+project doc: md5 bundle `02b5f74bbd193713e3835b92abf55570` (72535 bytes) —
+nhưng md5 này thay đổi mỗi lần nhánh có commit mới, nên lấy giá trị trong lần
+chạy gần nhất.
+
+### Dependencies để chạy test trong container sạch
+
+```bash
+pip install --break-system-packages fastapi "uvicorn[standard]" pydantic \
+  pydantic-settings python-dotenv httpx openai groq huggingface-hub \
+  beautifulsoup4 pytest pytest-asyncio loguru edge-tts "sqlalchemy[asyncio]" \
+  bcrypt PyJWT redis pypdf aiosqlite fakeredis        # đủ cho lite (RAG_ENABLED=false)
+pip install --break-system-packages langchain langchain-community "chromadb>=0.5.18"
+```
+
+`aiosqlite` + `fakeredis` là bắt buộc, nếu thiếu thì 35 test trong
+`tests/test_local_integration.py` báo ERROR ở fixture (không phải lỗi của code).
+`paddleocr`/`paddlepaddle` **không cài được** trên Python 3.13 của container.
+
+---
+
 ## Backlog
 
 ### P0 — Ổn định nền tảng
