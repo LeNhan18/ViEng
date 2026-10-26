@@ -210,15 +210,21 @@ def _install_fake_langchain(monkeypatch, *, build, chunks_out=None):
     """Cài module langchain giả để index_knowledge_base chạy được không cần deps thật.
 
     `build(documents, embedding, persist_directory)` quyết định thành công/thất bại.
+
+    `from_documents` nhận `ids` và `**kwargs` giống Chroma thật; ID được ghi vào
+    `captured_ids` để test kiểm tra index có dùng ID ổn định hay không.
     """
+    captured: dict = {}
     vs_mod = types.ModuleType("langchain_community.vectorstores")
 
     class Chroma:
         @staticmethod
-        def from_documents(documents, embedding, persist_directory):
+        def from_documents(documents, embedding, persist_directory, ids=None, **kwargs):
+            captured["ids"] = ids
+            captured["kwargs"] = kwargs
             return build(documents, embedding, persist_directory)
 
-        def __init__(self, persist_directory=None, embedding_function=None):
+        def __init__(self, persist_directory=None, embedding_function=None, **kwargs):
             self._collection = FakeCollection(1)
 
     vs_mod.Chroma = Chroma
@@ -247,6 +253,8 @@ def _install_fake_langchain(monkeypatch, *, build, chunks_out=None):
         ("langchain_core.documents", core_docs),
     ]:
         monkeypatch.setitem(sys.modules, name, mod)
+
+    return captured
 
 
 @pytest.fixture
@@ -555,3 +563,240 @@ def test_successful_build_removes_incomplete_marker(svc, kb, monkeypatch):
     assert active is not None
     assert not (active / ".incomplete").exists()
     assert svc.active_version() in svc.list_versions()
+
+
+# =====================================================================
+# Tương thích index: embedding model / distance metric / schema metadata
+# =====================================================================
+#
+# Bug được chặn ở đây: đổi EMBEDDING_MODEL mà không reindex. Vector trong index
+# thuộc không gian của model cũ, nên truy vấn vẫn "chạy" và trả về kết quả vô
+# nghĩa — hoặc Chroma báo một lỗi dimension rất khó hiểu. Cả hai đều âm thầm.
+
+
+def _write_meta(svc, version: str, **fields) -> Path:
+    """Tạo version index giả kèm index_meta.json."""
+    from app.services.rag_metadata import write_index_meta
+
+    p = _make_index(svc, version=version)
+    meta = {"embedding_model": svc._embedding_model, "distance_metric": ""}
+    meta.update(fields)
+    write_index_meta(p, meta)
+    return p
+
+
+def test_index_meta_is_empty_without_index(svc):
+    assert svc.index_meta() == {}
+    assert svc.index_compatibility_problem() == ""
+
+
+def test_index_meta_is_read_from_active_version(svc):
+    _write_meta(svc, "v1", num_chunks=42)
+    assert svc.index_meta()["num_chunks"] == 42
+
+
+def test_compatible_index_has_no_problem(svc):
+    _write_meta(svc, "v1")
+    assert svc.index_compatibility_problem() == ""
+    assert svc.status()["index"]["compatible"] is True
+
+
+def test_model_mismatch_blocks_vectorstore_load(svc, monkeypatch):
+    """Index build bằng model khác -> KHÔNG mở index, báo INDEX_INCOMPATIBLE."""
+    _write_meta(svc, "v1", embedding_model="some-other-model")
+    # Embedder "ổn" để chứng minh việc chặn đến từ metadata, không phải lỗi embedder.
+    monkeypatch.setattr(svc, "_get_embeddings", lambda: object())
+
+    assert svc._get_vectorstore() is None
+    assert svc._index_incompatible
+    result = svc.retrieve_detailed("present perfect")
+    assert result.status is RagStatus.INDEX_INCOMPATIBLE
+    assert result.degraded, "phải là trạng thái degraded, không phải 'không có kết quả'"
+    assert "some-other-model" in result.detail
+    assert svc._embedding_model in result.detail
+
+
+def test_model_mismatch_shows_in_status_and_is_not_ready(svc):
+    _write_meta(svc, "v1", embedding_model="some-other-model")
+    st = svc.status()
+    assert st["status"] == RagStatus.INDEX_INCOMPATIBLE.value
+    assert st["ready"] is False
+    assert st["index"]["present"] is True, "index vẫn có trên đĩa"
+    assert st["index"]["compatible"] is False
+    assert "/rag/index" in st["index"]["incompatible_reason"]
+    assert svc.is_ready() is False
+
+
+def test_distance_metric_mismatch_is_detected(svc, monkeypatch):
+    monkeypatch.setattr(svc, "_distance_metric", "cosine")
+    _write_meta(svc, "v1", distance_metric="l2")
+    assert "distance metric" in svc.index_compatibility_problem()
+
+
+def test_legacy_index_without_meta_still_loads(svc, monkeypatch):
+    """Index của bản cũ không có index_meta.json — không được chặn."""
+    _make_index(svc, version="v-old")
+    monkeypatch.setattr(svc, "_get_embeddings", lambda: object())
+    assert svc.index_meta() == {}
+    assert svc.index_compatibility_problem() == ""
+    assert svc.status()["index"]["compatible"] is True
+
+
+def test_dimension_mismatch_error_maps_to_incompatible(svc, monkeypatch):
+    """Lỗi dimension của Chroma là 'phải reindex', không phải 'thử lại sau'."""
+    err = ValueError(
+        "Collection expecting embedding with dimension of 384, got 1024"
+    )
+    monkeypatch.setattr(svc, "_resolve_store", lambda: (FakeStore(raises=err), None))
+
+    for call in (
+        svc.retrieve_detailed,
+        svc.retrieve_mmr_detailed,
+        svc.retrieve_with_scores_detailed,
+    ):
+        result = call("query")
+        assert result.status is RagStatus.INDEX_INCOMPATIBLE, call.__name__
+        assert "reindex" in result.detail.lower() or "/rag/index" in result.detail
+
+
+def test_unrelated_retrieval_error_stays_retrieval_error(svc, monkeypatch):
+    err = RuntimeError("attempt to write a readonly database")
+    monkeypatch.setattr(svc, "_resolve_store", lambda: (FakeStore(raises=err), None))
+    assert svc.retrieve_detailed("q").status is RagStatus.RETRIEVAL_ERROR
+
+
+def test_reset_clears_incompatible_flag(svc):
+    svc._index_incompatible = "stale"
+    svc.reset()
+    assert svc._index_incompatible == ""
+
+
+def test_collection_kwargs_empty_by_default(svc):
+    """Mặc định KHÔNG ghi hnsw:space — giữ nguyên hành vi (và SCORE_THRESHOLD)."""
+    assert svc._collection_kwargs() == {}
+
+
+def test_collection_kwargs_set_when_metric_configured(svc, monkeypatch):
+    monkeypatch.setattr(svc, "_distance_metric", "cosine")
+    assert svc._collection_kwargs() == {
+        "collection_metadata": {"hnsw:space": "cosine"}
+    }
+
+
+def test_embedding_dim_reads_from_embedder(svc):
+    class E:
+        def embed_query(self, text):
+            return [0.0] * 768
+
+    assert svc._embedding_dim(E()) == 768
+
+
+def test_embedding_dim_returns_none_on_error(svc):
+    class E:
+        def embed_query(self, text):
+            raise RuntimeError("model not downloaded")
+
+    assert svc._embedding_dim(E()) is None
+
+
+def test_status_falls_back_to_meta_chunk_count(svc):
+    """num_chunks lấy từ metadata khi vectorstore chưa được load."""
+    _write_meta(svc, "v1", num_chunks=123)
+    assert svc._vectorstore is None
+    assert svc.status()["index"]["num_chunks"] == 123
+
+
+# =====================================================================
+# Indexing ghi ID ổn định + index_meta.json
+# =====================================================================
+
+
+def test_reindex_passes_stable_ids_to_chroma(svc, kb, monkeypatch):
+    """Không truyền `ids` thì Chroma tự cấp UUID -> mỗi lần index một tập ID khác."""
+    chunks = [
+        FakeDoc("Present perfect", {"source": str(kb / "a.txt")}),
+        FakeDoc("Past simple", {"source": str(kb / "a.txt")}),
+    ]
+    captured = _install_fake_langchain(
+        monkeypatch, build=lambda d, e, p: FakeStore(docs=d, count=len(d)),
+        chunks_out=chunks,
+    )
+    monkeypatch.setattr(svc, "_load_documents", lambda d: [FakeDoc("doc1")])
+    monkeypatch.setattr(svc, "_get_embeddings", lambda: object())
+
+    assert svc.index_knowledge_base(docs_dir=str(kb)) == 2
+    assert captured["ids"] == ["a.txt#0:0", "a.txt#0:1"]
+    assert len(set(captured["ids"])) == 2
+
+
+def test_reindex_writes_index_meta(svc, kb, monkeypatch):
+    class Emb:
+        def embed_query(self, text):
+            return [0.1] * 384
+
+    chunks = [FakeDoc("Present perfect", {"source": str(kb / "a.txt")})]
+    _install_fake_langchain(
+        monkeypatch, build=lambda d, e, p: FakeStore(docs=d, count=len(d)),
+        chunks_out=chunks,
+    )
+    monkeypatch.setattr(svc, "_load_documents",
+                        lambda d: [FakeDoc("doc1", {"source": str(kb / "a.txt")})])
+    monkeypatch.setattr(svc, "_get_embeddings", lambda: Emb())
+
+    svc.index_knowledge_base(docs_dir=str(kb))
+
+    meta = svc.index_meta()
+    assert meta["embedding_model"] == svc._embedding_model
+    assert meta["embedding_dim"] == 384
+    assert meta["num_chunks"] == 1
+    assert meta["version"] == svc.active_version()
+    assert meta["chunk_size"] and meta["chunk_overlap"]
+    # Phiên bản corpus: hai lần đo chỉ so sánh được khi fingerprint giống nhau.
+    assert len(meta["corpus_fingerprint"]) == 16
+    assert meta["created_at"].endswith("Z")
+    # Index vừa build phải tự tương thích với cấu hình đang chạy.
+    assert svc.index_compatibility_problem() == ""
+
+
+def test_index_meta_absent_when_build_fails(svc, kb, monkeypatch):
+    """Build lỗi -> không được ghi metadata cho version lỗi, và version cũ giữ nguyên."""
+    from app.services.rag_metadata import INDEX_META_FILE
+
+    active = _make_index(svc, version="v-old")
+    _install_fake_langchain(
+        monkeypatch,
+        build=lambda d, e, p: (_ for _ in ()).throw(RuntimeError("embedding down")),
+        chunks_out=[FakeDoc("c1", {"source": str(kb / "a.txt")})],
+    )
+    monkeypatch.setattr(svc, "_load_documents", lambda d: [FakeDoc("doc1")])
+    monkeypatch.setattr(svc, "_get_embeddings", lambda: object())
+
+    with pytest.raises(RuntimeError, match="embedding down"):
+        svc.index_knowledge_base(docs_dir=str(kb))
+
+    assert svc.active_version() == "v-old"
+    assert not (active / INDEX_META_FILE).exists()
+
+
+def test_reindex_metadata_lands_on_chunks(svc, kb, monkeypatch):
+    """Chunk đi vào Chroma phải mang đủ doc_id/chunk_id/content_hash."""
+    chunks = [FakeDoc(
+        "## Tenses\nThe present perfect is used for actions that are not finished.",
+        {"source": str(kb / "g/a.txt")},
+    )]
+    _install_fake_langchain(
+        monkeypatch, build=lambda d, e, p: FakeStore(docs=d, count=len(d)),
+        chunks_out=chunks,
+    )
+    monkeypatch.setattr(svc, "_load_documents", lambda d: [FakeDoc("doc1")])
+    monkeypatch.setattr(svc, "_get_embeddings", lambda: object())
+
+    svc.index_knowledge_base(docs_dir=str(kb))
+
+    m = chunks[0].metadata
+    assert m["doc_id"] == "g/a.txt"
+    assert m["chunk_id"] == "g/a.txt#0:0"
+    assert m["section"] == "Tenses"
+    assert m["language"] == "en"
+    assert len(m["content_hash"]) == 16
+    assert m["version"] == svc.active_version()

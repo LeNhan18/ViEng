@@ -191,6 +191,126 @@ git fetch /path/to/vieng-rag-automation.bundle automation/vieng-rag:automation/v
 
 ---
 
+## Lần chạy 2026-10-26 (#2)
+
+Điểm bắt đầu: nhánh `automation/vieng-rag` @ `2ae61fc` (3 commit của lần #1).
+Baseline test trước khi sửa: **102 passed** — khớp với lần #1.
+
+> Lưu ý vận hành: `main` trên GitHub vẫn ở `cd454d0`, nhánh automation **chưa có
+> trên remote** (xem BLOCKER). Nhánh được dựng lại trong phiên này bằng cách áp
+> 3 patch đã lưu trong project doc. Đã kiểm chứng áp lại sạch (`git am`).
+
+### Đã làm — P2: metadata/ID ổn định + kiểm tra tương thích index — DONE
+
+Chọn hạng mục này trước P1 vì eval retrieval cần nhãn `doc_id`/`chunk_id` ổn định,
+và việc kiểm tra tương thích model/dimension cũng dựa trên cùng metadata.
+
+**Vấn đề thật được sửa**
+
+1. *Không gán nhãn eval được.* Chunk chỉ mang `source` là **đường dẫn tuyệt đối
+   trên máy build** (`E:\AI_CACHE\...` vs `/app/data/...`) nên không dùng làm nhãn
+   được, và chunk không có ID nào cả.
+2. *Reindex sinh ID mới hoàn toàn.* Không truyền `ids` thì Chroma tự cấp UUID, nên
+   hai lần index cùng một corpus cho ra hai tập ID khác nhau — không so sánh được
+   giữa các version index.
+3. *Đổi `EMBEDDING_MODEL` mà không reindex là lỗi âm thầm.* Vector trong index
+   thuộc không gian model cũ, nên truy vấn vẫn "thành công" và trả **kết quả vô
+   nghĩa**, hoặc Chroma báo một lỗi `dimension` rất khó hiểu. Trước đây không có
+   chỗ nào phát hiện.
+
+**Đã triển khai**
+
+- `app/services/rag_metadata.py` (mới, **không import langchain** để lite mode
+  dùng được): `doc_id` (đường dẫn POSIX tương đối so với gốc corpus → giống nhau
+  trên Windows/Ubuntu/Docker), `chunk_id` = `<doc_id>#<page>:<ordinal>` (duy nhất,
+  ổn định), `content_hash` (sha256 16 hex, chuẩn hoá khoảng trắng trước khi hash),
+  `section` (heading nhận ra chắc chắn, không đoán bừa), `language` (vi/en/unknown
+  bằng heuristic, không thêm dependency), `version`, `metadata_schema`.
+- `corpus_fingerprint()`: hash toàn bộ `(doc_id, chunk_id, content_hash)` đã sort
+  — bất biến với thứ tự, đổi khi nội dung/tập tài liệu đổi. Đây là **phiên bản dữ
+  liệu** cho báo cáo eval ở P1.
+- `index_knowledge_base` truyền `ids=` vào Chroma và ghi `index_meta.json` trong
+  mỗi thư mục version (model, dimension, distance metric, `chunk_size/overlap`,
+  số chunk/doc/file, `corpus_fingerprint`, `created_at`). Ghi **sau verify, trước
+  activate**: một version đã activate mà thiếu metadata sẽ bị coi là "index cũ
+  không rõ model" và lọt qua kiểm tra tương thích.
+- `RagStatus.INDEX_INCOMPATIBLE` (thuộc `DEGRADED_STATUSES`) — tách khỏi
+  `RETRIEVAL_ERROR` vì việc cần làm khác nhau: "phải reindex", không phải "thử lại
+  sau". `_get_vectorstore()` **từ chối mở** index lệch model/metric/schema, và
+  kiểm tra **trước khi load embedder** để không mất công tải cả model.
+- Lỗi `dimension mismatch` của Chroma lúc truy xuất cũng được quy về trạng thái
+  này (`looks_like_dimension_mismatch`) thay vì lỗi truy xuất chung.
+- `status()` trả `index.compatible`, `index.incompatible_reason`, `index.meta`;
+  `num_chunks` lấy từ metadata khi vectorstore chưa load. `is_ready()` tính cả
+  tính tương thích → `GET /health/ready` trả **503** kèm lý do và `index_version`.
+- `POST /rag/search` trả `sources` có cấu trúc: `doc_id`, `chunk_id`, `page`,
+  `section`, `language`, `content_hash`, `score`, `evidence` (đoạn quanh từ khoá
+  truy vấn) + `index_version`. `GET /rag/list` trả thêm `doc_id`/`chunk_id`.
+  *(Đây là phần lớn mục đầu của P3; phần "nguồn thực sự hỗ trợ câu trả lời" vẫn
+  còn TODO.)*
+- `RAG_DISTANCE_METRIC` (config + `.env.example`). **Mặc định để trống** = không
+  ghi `hnsw:space`, hành vi giống hệt bản trước — `SCORE_THRESHOLD` đang chuẩn
+  theo `l2`, đổi metric mà không đổi ngưỡng sẽ làm bộ lọc `NO_EVIDENCE` sai hoàn
+  toàn. Đổi giá trị thì phải reindex; index cũ bị từ chối kèm lý do.
+- Tài liệu: `docs/rag/metadata.md` (các field, cách chọn schema `chunk_id`, định
+  dạng `index_meta.json`, cơ chế kiểm tra tương thích).
+
+**Tương thích ngược**: index của bản cũ (không có `index_meta.json`) **không bị
+chặn** — không biết nó build bằng model gì thì không kết luận; nó chuyển sang
+layout có metadata ở lần reindex tới. Chunk cũ không có `doc_id`/`chunk_id` vẫn
+trả về được qua API, các field mới là `null` (có test).
+
+### Kiểm thử đã chạy
+
+| Hạng mục | Kết quả |
+|---|---|
+| `pytest -q` (`RAG_ENABLED=false`, lite) | **172 passed** (baseline 102 → +70 test mới) |
+| `pytest -q` (`RAG_ENABLED=true`) | 172 passed |
+| `pyflakes` trên file đã sửa/thêm | sạch (chỉ còn `app/core/config.py:5 'os' unused` — **có sẵn từ trước**) |
+| `scripts/verify_rag_metadata.py` (ChromaDB thật) | **6/6 bước PASS**, chạy lại 4 lần đều pass |
+| `scripts/verify_rag_pipeline.py` (ChromaDB thật) | **8/8 bước PASS**, chạy lại 3 lần đều pass |
+
+File test mới: `tests/test_rag_metadata.py` (48). Thêm vào `tests/test_rag_service.py`
+(+18) và `tests/test_rag_api.py` (+3).
+
+`scripts/verify_rag_metadata.py` (mới) kiểm chứng với ChromaDB **thật**: ID trong
+collection là ID của ta (không phải UUID Chroma cấp) → index lại cùng corpus cho
+**cùng tập ID và cùng fingerprint** → thêm tài liệu mới thì fingerprint đổi nhưng
+**ID chunk cũ không đổi** → đổi `EMBEDDING_MODEL` thì index bị **từ chối** (status
+`index_incompatible`, `ready=False`) → trả model về đúng thì dùng lại được ngay,
+không cần reindex.
+
+### Vấn đề gặp trong lúc làm
+
+- **Script verify bị flaky khi nối thêm bước vào `verify_rag_pipeline.py`.**
+  chromadb 1.x chia sẻ trạng thái theo *tiến trình*; một tiến trình mở quá nhiều
+  client (và `rmtree` thư mục của version cũ khi prune) thì một bước bất kỳ sẽ fail
+  `attempt to write a readonly database`. Thêm `_release_vectorstore()` trước mỗi
+  reindex giúp nhưng **vẫn flaky 1/3 lần**. Đã tách hẳn các bước mới ra
+  `scripts/verify_rag_metadata.py` (tiến trình riêng) → cả hai script pass ổn định
+  (4/4 và 3/3). Lý do tách được ghi trong docstring của script.
+  *Đây là giới hạn của harness kiểm chứng, không phải bug của app*: app chỉ có một
+  `rag_service` singleton và nó `reset()` sau mỗi reindex.
+- `verify_rag_pipeline.py` trước đây dùng `shutil.rmtree(..., ignore_errors=True)`
+  rồi chạy tiếp; sót dữ liệu của lần trước làm lần sau fail ở một bước ngẫu nhiên,
+  nhìn như bug của code đang test. Nay dừng ngay với thông báo rõ nếu không dọn được.
+
+### Phần CHƯA xác minh
+
+- **Vẫn chưa chạy được embedding model thật** (`huggingface.co` bị chặn egress,
+  403 ở proxy). `embedding_dim` ghi vào metadata được kiểm chứng bằng embedder
+  xác định 256 chiều; với `BAAI/bge-m3` phải ra 1024 — **chưa xác nhận thật**.
+  Việc này cần một lần chạy trên máy có mạng HF.
+- Kiểm tra tương thích so **tên model dạng chuỗi**, không so vector thật. Hai
+  chuỗi khác nhau trỏ cùng một model (ví dụ repo id vs đường dẫn local tới cùng
+  snapshot) sẽ bị báo không tương thích — an toàn nhưng gây khó chịu. Chấp nhận
+  được: thông báo nói rõ cách tắt là đặt `EMBEDDING_MODEL` về giá trị cũ.
+- Chưa kiểm chứng trên index/dữ liệu thật của ai: index cũ sẽ chạy nhánh "không có
+  metadata" cho tới lần reindex tới.
+- OCR/Paddle vẫn chưa chạy thật ở đây (không có bản cho Python 3.13).
+
+---
+
 ## Backlog
 
 ### P0 — Ổn định nền tảng
@@ -215,7 +335,8 @@ git fetch /path/to/vieng-rag-automation.bundle automation/vieng-rag:automation/v
   (`evals/suites.py` hiện chỉ đo kiến thức LLM, không chạm vectorstore).
 - [TODO] Định dạng dataset: `query_id`, `query`, nhãn `doc_id`/`chunk_id`, mức liên quan.
 - [TODO] Hit Rate@K, Recall@K, MRR@K, NDCG@K + test công thức và trường hợp biên.
-- [TODO] Tách tập dev/test; ghi phiên bản corpus, index (đã có `index.version`), cấu hình.
+- [TODO] Tách tập dev/test. *Phần ghi phiên bản đã có:* `corpus_fingerprint` +
+  `index_meta.json` (model, dim, metric, chunk config) từ lần chạy #2.
 - [TODO] Đánh giá câu trả lời: đúng kiến thức, có căn cứ trong context, trích nguồn
   đúng, xử lý thiếu thông tin.
 - [TODO] Đo latency từng bước và toàn luồng, báo p50/p95 (đã có `obs_stats` để dùng lại).
@@ -224,12 +345,15 @@ git fetch /path/to/vieng-rag-automation.bundle automation/vieng-rag:automation/v
   lite cũng chạy được.
 
 ### P2 — Cải thiện retrieval (chưa bắt đầu)
-- [TODO] Chuẩn hoá metadata và ID ổn định: `doc_id`, `chunk_id`, `source`, `page`,
-  `section`, `language`, `version`, `content_hash`. Hiện chunk chỉ có `source` +
-  `page` (PDF). **Nên làm trước P1** vì eval cần nhãn `doc_id`/`chunk_id` ổn định.
-- [TODO] Kiểm tra tương thích embedding model / dimension / distance metric khi mở
-  index. Hiện đổi `EMBEDDING_MODEL` mà không reindex sẽ lỗi hoặc cho kết quả rác.
-  Nên ghi model + dim vào metadata của version và so khi load.
+- [DONE] Chuẩn hoá metadata và ID ổn định: `doc_id`, `chunk_id`, `source`, `page`,
+  `section`, `language`, `version`, `content_hash` (+ `chunk_ordinal`,
+  `metadata_schema`). Xem `docs/rag/metadata.md`. Lần chạy #2.
+- [DONE] Kiểm tra tương thích embedding model / distance metric / metadata schema
+  khi mở index (`RagStatus.INDEX_INCOMPATIBLE`); lỗi `dimension mismatch` của
+  Chroma cũng được quy về trạng thái này. Model + dimension + `corpus_fingerprint`
+  được ghi vào `index_meta.json` của từng version. Lần chạy #2.
+  *Còn lại:* so **dimension thật** của embedder lúc load (hiện chỉ so tên model;
+  dimension được ghi lúc build và dùng để chẩn đoán).
 - [TODO] Chunking theo cấu trúc tài liệu (hiện `RecursiveCharacterTextSplitter`
   500/50 cho mọi loại), giữ quy tắc cùng ví dụ, bảo toàn bảng, kiểm soát theo token.
 - [TODO] So sánh dense / MMR / hybrid BM25+dense hợp nhất bằng RRF (cần P1 trước
@@ -238,8 +362,9 @@ git fetch /path/to/vieng-rag-automation.bundle automation/vieng-rag:automation/v
 - [TODO] Rerank tập ứng viên trước khi chọn context cuối, loại trùng, giới hạn token budget.
 
 ### P3 — Hoàn thiện trải nghiệm (chưa bắt đầu)
-- [TODO] Trả nguồn có cấu trúc với document, page, `chunk_id`, đoạn bằng chứng.
-  `/rag/search` đã trả `sources` (source + page) — còn `chunk_id` và đoạn bằng chứng.
+- [DONE] Trả nguồn có cấu trúc với document, page, `chunk_id`, đoạn bằng chứng.
+  `/rag/search` trả `doc_id`, `chunk_id`, `page`, `section`, `language`,
+  `content_hash`, `score`, `evidence` + `index_version`. Lần chạy #2.
 - [TODO] Phân biệt tài liệu được truy xuất với nguồn thực sự hỗ trợ câu trả lời.
 - [TODO] Truy vấn nối tiếp bằng lịch sử / query rewriting, tránh gọi thêm LLM mỗi lượt.
 - [TODO] `conversation_id`, giới hạn lịch sử theo token budget, phân tách hội thoại.
@@ -252,18 +377,27 @@ git fetch /path/to/vieng-rag-automation.bundle automation/vieng-rag:automation/v
 
 ## Việc ưu tiên cho lần chạy sau
 
-1. **P2 metadata + ID ổn định** (`doc_id`, `chunk_id`, `content_hash`, model/dim
-   ghi vào version metadata). Làm trước P1 vì eval cần nhãn ổn định, và việc kiểm
-   tra tương thích model/dim cũng dựa vào đây.
-2. **P1 khung đo retrieval**: dataset format + Hit Rate/Recall/MRR/NDCG@K kèm test
-   công thức, chạy được bằng embedder xác định để vào được CI lite.
-3. Dọn phần còn lại của P0-5 (dùng `rag_max_concurrency`) và pin `chromadb`.
+1. **P1 khung đo retrieval** — giờ đã có nhãn ổn định để làm:
+   - định dạng dataset `query_id`, `query`, nhãn `doc_id`/`chunk_id`, mức liên quan;
+   - Hit Rate@K, Recall@K, MRR@K, NDCG@K + test công thức và trường hợp biên
+     (K > số nhãn, không có nhãn nào, nhãn trùng, mức liên quan nhiều bậc);
+   - runner chạy qua retrieval **thật**, báo cáo kèm `corpus_fingerprint` +
+     `index_meta` để một phép đo tái lập được;
+   - chạy được bằng embedder xác định (như `scripts/verify_rag_metadata.py`) để
+     vào được CI lite, không cần API trả phí.
+2. Đo latency từng bước + p50/p95 (dùng lại `obs_stats`).
+3. Dọn phần còn lại của P0-5 (dùng `rag_max_concurrency`) và pin `chromadb`
+   (hiện `>=0.5.18`, resolve ra 1.5.9).
 4. Kiểm chứng persistence với volume Docker/K8s thật (`k8s/`, `docker-compose.yml`).
 
 ## Tham chiếu
 
-- `scripts/verify_rag_pipeline.py` — kiểm chứng e2e (cần `requirements.txt`, không
-  chạy ở lite). `PYTHONPATH=. python scripts/verify_rag_pipeline.py`
+- `scripts/verify_rag_pipeline.py` — kiểm chứng e2e index/reindex/rollback (cần
+  `requirements.txt`, không chạy ở lite).
+  `PYTHONPATH=. python scripts/verify_rag_pipeline.py`
+- `scripts/verify_rag_metadata.py` — kiểm chứng e2e ID/metadata/tương thích index.
+  `PYTHONPATH=. python scripts/verify_rag_metadata.py`
+- `app/services/rag_metadata.py` + `docs/rag/metadata.md` — metadata và ID ổn định.
 - `app/core/paths.py` — mọi quyết định về cache/temp dir.
 - `app/services/rag_service.py` — `RagStatus`, `RetrievalResult`, layout version.
 - Endpoint quản trị cần header `X-Admin-Key` = `ADMIN_API_KEY`.

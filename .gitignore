@@ -67,3 +67,4 @@ evals/reports/
 
 # Thư mục làm việc của scripts/verify_rag_pipeline.py
 .rag-verify/
+.rag-verify-meta/

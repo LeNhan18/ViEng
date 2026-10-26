@@ -24,6 +24,7 @@ from app.db.database import get_db
 from app.models.orm import User
 from app.services.llm_service import LLMNotConfiguredError, llm_service
 from app.services.ocr_service import OCRError, ocr_service
+from app.services.rag_metadata import evidence_snippet
 from app.services.rag_service import RagStatus, rag_service
 from app.services.structured import StructuredOutputError
 from app.core.observability import stats as obs_stats
@@ -76,6 +77,15 @@ async def readiness_check():
                 "status": rag["status"],
                 "embedder": rag["embedder"],
                 "index_present": rag["index"]["present"],
+                "index_version": rag["index"].get("version", ""),
+                # Lý do chính đáng duy nhất khiến index có mặt nhưng không dùng
+                # được: nó được build bằng cấu hình embedding khác. Thiếu field
+                # (index cũ / caller khác) = không kết luận, giống legacy index.
+                "index_compatible": rag["index"].get("compatible", True),
+                "reason": (
+                    rag["index"].get("incompatible_reason")
+                    or rag.get("last_error", "")
+                ),
             }
         },
     }
@@ -728,6 +738,12 @@ async def list_vectorstore(limit: int = 20, offset: int = 0):
                 src = src.split("/")[-1].split("\\")[-1]
             chunks.append({
                 "index": offset + i + 1,
+                "doc_id": m.get("doc_id"),
+                "chunk_id": m.get("chunk_id"),
+                "page": m.get("page"),
+                "section": m.get("section") or None,
+                "language": m.get("language"),
+                "content_hash": m.get("content_hash"),
                 "source": src,
                 "content": d[:500] + "..." if len(d) > 500 else d,
                 "length": len(d),
@@ -746,6 +762,10 @@ _RAG_STATUS_MESSAGES = {
     RagStatus.INDEX_NOT_READY: "Vectorstore chưa được tạo — hãy chạy POST /rag/index.",
     RagStatus.RETRIEVAL_ERROR: "Lỗi khi truy xuất vectorstore.",
     RagStatus.NO_EVIDENCE: "Không tìm thấy tài liệu nào khớp truy vấn.",
+    RagStatus.INDEX_INCOMPATIBLE: (
+        "Index hiện có được build bằng cấu hình embedding khác — hãy chạy lại "
+        "POST /rag/index."
+    ),
     RagStatus.OK: "",
 }
 
@@ -764,13 +784,23 @@ async def search_knowledge(query: str):
         "detail": result.detail,
         "num_results": len(result.documents),
         "results": result.context,
+        # Nguồn có cấu trúc: doc_id/chunk_id ổn định (gán nhãn eval được) kèm
+        # đoạn bằng chứng, thay vì chỉ một đường dẫn tuyệt đối của máy build.
         "sources": [
             {
+                "doc_id": doc.metadata.get("doc_id"),
+                "chunk_id": doc.metadata.get("chunk_id"),
                 "source": doc.metadata.get("source", "N/A"),
                 "page": doc.metadata.get("page"),
+                "section": doc.metadata.get("section") or None,
+                "language": doc.metadata.get("language"),
+                "content_hash": doc.metadata.get("content_hash"),
+                "score": score,
+                "evidence": evidence_snippet(doc.page_content, query),
             }
-            for doc, _ in result.documents
+            for doc, score in result.documents
         ],
+        "index_version": rag_service.active_version(),
     }
     if result.degraded:
         # Hệ thống đang hỏng, không phải "không có kết quả" -> đừng trả 200.

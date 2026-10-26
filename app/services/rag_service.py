@@ -38,6 +38,11 @@ class RagStatus(str, Enum):
     INDEX_NOT_READY = "index_not_ready"
     RETRIEVAL_ERROR = "retrieval_error"
     NO_EVIDENCE = "no_evidence"
+    #: Index có trên đĩa nhưng được build bằng embedding model / distance
+    #: metric khác cấu hình hiện tại -> vector không cùng không gian, kết quả
+    #: sẽ là rác. Tách riêng khỏi RETRIEVAL_ERROR vì cách xử lý khác nhau:
+    #: đây là "phải reindex", không phải "thử lại sau".
+    INDEX_INCOMPATIBLE = "index_incompatible"
 
 
 #: Những trạng thái nghĩa là "hệ thống có vấn đề", khác với NO_EVIDENCE
@@ -46,6 +51,7 @@ DEGRADED_STATUSES = frozenset({
     RagStatus.EMBEDDER_UNAVAILABLE,
     RagStatus.INDEX_NOT_READY,
     RagStatus.RETRIEVAL_ERROR,
+    RagStatus.INDEX_INCOMPATIBLE,
 })
 
 
@@ -106,6 +112,10 @@ _INCOMPLETE_MARKER = ".incomplete"
 # của exception giữ frame), và rmtree lúc đó phá trạng thái sqlite toàn tiến trình.
 _PROCESS_START = time.time()
 
+# Cấu hình chunk, ghi vào metadata của index để một phép đo tái lập được.
+_CHUNK_SIZE = 500
+_CHUNK_OVERLAP = 50
+
 
 class RAGService:
     """Quản lý RAG pipeline: indexing knowledge base và truy xuất context."""
@@ -121,10 +131,15 @@ class RAGService:
         self._embedding_model = settings.embedding_model
         self._enabled = bool(settings.rag_enabled)
         self._keep_old = max(0, int(settings.rag_keep_old_indexes))
+        self._distance_metric = (settings.rag_distance_metric or "").strip()
         # Cờ ghi nhớ load embedder/vectorstore thất bại để khỏi thử lại liên tục
         # và đỡ spam log. reset() xoá cờ sau khi reindex thành công.
         self._embedder_broken = False
         self._vectorstore_broken = False
+        # Index trên đĩa không khớp cấu hình embedding hiện tại (xem
+        # RagStatus.INDEX_INCOMPATIBLE). Tách khỏi _vectorstore_broken để
+        # thông báo cho người vận hành đúng việc cần làm: reindex.
+        self._index_incompatible = ""
         self._last_error = ""
         # Chỉ cho một lần reindex chạy tại một thời điểm.
         self._index_lock = threading.Lock()
@@ -136,6 +151,7 @@ class RAGService:
         self._vectorstore = None
         self._vectorstore_broken = False
         self._embedder_broken = False
+        self._index_incompatible = ""
         self._last_error = ""
 
     def _release_vectorstore(self) -> None:
@@ -224,10 +240,21 @@ class RAGService:
     def status(self) -> dict:
         """Ảnh chụp trạng thái RAG cho health/readiness và debug."""
         index_present = self._index_exists()
+        meta = self.index_meta() if index_present else {}
+        # Tính cả khi chưa load vectorstore, để readiness probe phát hiện sớm
+        # index không khớp model thay vì đợi request đầu tiên trả rác.
+        incompatible = self._index_incompatible or (
+            self.index_compatibility_problem() if index_present else ""
+        )
+        # 0 là số chunk hợp lệ (dù reindex không cho phép), nên phân biệt với
+        # None = "chưa load, không đọc được" thay vì dùng `or`.
+        counted = self._count_chunks()
         if not self._enabled:
             overall = RagStatus.DISABLED
         elif self._embedder_broken:
             overall = RagStatus.EMBEDDER_UNAVAILABLE
+        elif incompatible:
+            overall = RagStatus.INDEX_INCOMPATIBLE
         elif self._vectorstore_broken:
             overall = RagStatus.RETRIEVAL_ERROR
         elif not index_present:
@@ -252,8 +279,14 @@ class RAGService:
                 "available_versions": self.list_versions(),
                 "loaded": self._vectorstore is not None,
                 "broken": self._vectorstore_broken,
-                "num_chunks": self._count_chunks(),
+                "num_chunks": counted if counted is not None else meta.get("num_chunks"),
+                "compatible": not incompatible,
+                "incompatible_reason": incompatible,
+                # Metadata ghi lúc build: dùng để tái lập một phép đo (model,
+                # cấu hình chunk, phiên bản corpus) và để kiểm tra tương thích.
+                "meta": meta,
             },
+            "distance_metric": self._distance_metric or "default",
             "last_error": self._last_error,
         }
 
@@ -273,7 +306,9 @@ class RAGService:
             self._enabled
             and not self._embedder_broken
             and not self._vectorstore_broken
+            and not self._index_incompatible
             and self._index_exists()
+            and not self.index_compatibility_problem()
         )
 
     # ------------------------------------------------------------- components
@@ -319,6 +354,18 @@ class RAGService:
                         "Vectorstore chưa được tạo. Hãy chạy index_knowledge_base() trước."
                     )
                     return None
+                # Kiểm tra tương thích TRƯỚC KHI load embedder: nếu index được
+                # build bằng model khác thì truy vấn sẽ không báo lỗi mà trả kết
+                # quả vô nghĩa (hoặc Chroma báo lỗi dimension rất khó hiểu). Kiểm
+                # trước cũng để không mất công tải cả model embedding rồi mới
+                # phát hiện index không dùng được.
+                problem = self.index_compatibility_problem()
+                if problem:
+                    self._index_incompatible = problem
+                    self._last_error = f"index incompatible: {problem}"
+                    logger.error("Index không tương thích cấu hình hiện tại: {}", problem)
+                    return None
+
                 embeddings = self._get_embeddings()
                 if embeddings is None:
                     # Embedder broken -> không thể truy vấn vectorstore.
@@ -327,6 +374,7 @@ class RAGService:
                 self._vectorstore = Chroma(
                     persist_directory=str(active),
                     embedding_function=embeddings,
+                    **self._collection_kwargs(),
                 )
                 logger.info(f"Loaded vectorstore from {active}")
             except Exception as e:
@@ -337,6 +385,60 @@ class RAGService:
                 )
                 return None
         return self._vectorstore
+
+    # --- tương thích index / metadata --------------------------------------
+
+    def _collection_kwargs(self) -> dict:
+        """Tham số collection truyền cho Chroma.
+
+        Chỉ truyền ``hnsw:space`` khi người vận hành đặt ``RAG_DISTANCE_METRIC``
+        một cách tường minh. Mặc định để trống để hành vi (và do đó
+        ``SCORE_THRESHOLD``) giống hệt bản trước — đổi metric mà không đổi ngưỡng
+        điểm sẽ làm bộ lọc NO_EVIDENCE sai hoàn toàn.
+        """
+        if not self._distance_metric:
+            return {}
+        return {"collection_metadata": {"hnsw:space": self._distance_metric}}
+
+    def index_meta(self) -> dict:
+        """Metadata của version index đang dùng (``{}`` nếu index cũ không có)."""
+        from app.services.rag_metadata import read_index_meta
+
+        active = self.active_index_path()
+        if active is None:
+            return {}
+        return read_index_meta(active)
+
+    def index_compatibility_problem(self) -> str:
+        """Lý do index đang có không dùng được với cấu hình hiện tại (``""`` = ổn)."""
+        from app.services.rag_metadata import compatibility_problem
+
+        return compatibility_problem(
+            self.index_meta(), self._embedding_model, self._distance_metric
+        )
+
+    def _retrieval_failure(self, where: str, error: BaseException) -> RetrievalResult:
+        """Quy một lỗi truy xuất về đúng trạng thái.
+
+        Lỗi "dimension mismatch" của Chroma thực chất là index build bằng model
+        khác — báo INDEX_INCOMPATIBLE để người vận hành biết phải reindex, chứ
+        không phải RETRIEVAL_ERROR ("thử lại sau").
+        """
+        from app.services.rag_metadata import looks_like_dimension_mismatch
+
+        self._last_error = f"{where}: {type(error).__name__}: {error}"
+        if looks_like_dimension_mismatch(error):
+            problem = (
+                "Số chiều vector không khớp: index được build bằng embedding model "
+                f"khác với '{self._embedding_model}'. Hãy chạy lại POST /rag/index."
+            )
+            self._index_incompatible = problem
+            logger.error("RAG {} lỗi do index không tương thích: {}", where, error)
+            return RetrievalResult(
+                RagStatus.INDEX_INCOMPATIBLE, detail=f"{problem} ({error})"
+            )
+        logger.warning("RAG {} lỗi, bỏ qua context: {}", where, error)
+        return RetrievalResult(RagStatus.RETRIEVAL_ERROR, detail=self._last_error)
 
     def _resolve_store(self) -> tuple[object | None, RetrievalResult | None]:
         """-> (vectorstore, None) khi dùng được; (None, RetrievalResult lỗi) khi không."""
@@ -355,6 +457,10 @@ class RAGService:
             )
         vs = self._get_vectorstore()
         if vs is None:
+            if self._index_incompatible:
+                return None, RetrievalResult(
+                    RagStatus.INDEX_INCOMPATIBLE, detail=self._index_incompatible
+                )
             status = (
                 RagStatus.EMBEDDER_UNAVAILABLE if self._embedder_broken
                 else RagStatus.RETRIEVAL_ERROR
@@ -571,8 +677,8 @@ class RAGService:
             )
 
             splitter = RecursiveCharacterTextSplitter(
-                chunk_size=500,
-                chunk_overlap=50,
+                chunk_size=_CHUNK_SIZE,
+                chunk_overlap=_CHUNK_OVERLAP,
                 separators=["\n\n", "\n", ". ", " ", ""],
             )
             chunks = splitter.split_documents(documents)
@@ -587,6 +693,20 @@ class RAGService:
                 )
 
             version = self._new_version()
+
+            # ID và metadata ổn định PHẢI gắn trước khi build: Chroma tự cấp UUID
+            # nếu không truyền `ids`, nên mỗi lần reindex sinh một tập ID khác —
+            # không gán nhãn eval được và không so sánh được giữa các version.
+            from app.services.rag_metadata import (
+                METADATA_SCHEMA_VERSION,
+                corpus_fingerprint,
+                enrich_chunks,
+                write_index_meta,
+            )
+
+            chunk_ids = enrich_chunks(chunks, docs_root=docs_dir, version=version)
+            fingerprint = corpus_fingerprint(chunks)
+
             staging = self._versions_root / version
             if staging.exists():
                 shutil.rmtree(staging)
@@ -597,10 +717,33 @@ class RAGService:
                 documents=chunks,
                 embedding=embeddings,
                 persist_directory=str(staging),
+                ids=chunk_ids,
+                **self._collection_kwargs(),
             )
 
             # Verify: index phải có đúng số chunk và trả lời được một truy vấn thật.
             self._verify_staged(staged_store, expected=len(chunks))
+
+            # Metadata ghi SAU verify, TRƯỚC khi activate: một version đã kích hoạt
+            # mà thiếu metadata sẽ bị coi là "index cũ không rõ model" và lọt qua
+            # kiểm tra tương thích.
+            write_index_meta(staging, {
+                "schema": 1,
+                "metadata_schema": METADATA_SCHEMA_VERSION,
+                "version": version,
+                "created_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+                "embedding_model": self._embedding_model,
+                "embedding_dim": self._embedding_dim(embeddings),
+                "distance_metric": self._distance_metric,
+                "num_chunks": len(chunks),
+                "num_documents": len(documents),
+                "num_files": len(loaded_names),
+                "docs_dir": str(docs_dir),
+                "chunk_size": _CHUNK_SIZE,
+                "chunk_overlap": _CHUNK_OVERLAP,
+                "corpus_fingerprint": fingerprint,
+            })
+
             staged_store = self._close_store(staged_store)
             (staging / _INCOMPLETE_MARKER).unlink(missing_ok=True)
 
@@ -625,6 +768,20 @@ class RAGService:
                     "đánh dấu .incomplete và sẽ dọn sau khi restart.", staging.name,
                 )
             self._index_lock.release()
+
+    @staticmethod
+    def _embedding_dim(embeddings) -> int | None:
+        """Số chiều vector của embedder, hoặc None nếu không lấy được.
+
+        Ghi vào metadata index để chẩn đoán lỗi dimension mismatch về sau. Không
+        raise: metadata thiếu một field không đáng làm fail cả lần reindex.
+        """
+        try:
+            vector = embeddings.embed_query(_PROBE_QUERY)
+            return len(vector) if vector else None
+        except Exception as e:  # noqa: BLE001
+            logger.warning("Không xác định được số chiều embedding: {}", e)
+            return None
 
     def _verify_staged(self, store, expected: int) -> None:
         """Raise nếu index staging không dùng được (rỗng, thiếu, hay query lỗi).
@@ -664,9 +821,7 @@ class RAGService:
         try:
             docs = vs.similarity_search(query, k=k)
         except Exception as e:
-            self._last_error = f"similarity_search: {type(e).__name__}: {e}"
-            logger.warning("RAG similarity_search lỗi, bỏ qua context: {}", e)
-            return RetrievalResult(RagStatus.RETRIEVAL_ERROR, detail=self._last_error)
+            return self._retrieval_failure("similarity_search", e)
         if not docs:
             return RetrievalResult(
                 RagStatus.NO_EVIDENCE, detail="Không có chunk nào khớp truy vấn."
@@ -689,9 +844,7 @@ class RAGService:
                 query, k=k, fetch_k=fetch_k, lambda_mult=lambda_mult,
             )
         except Exception as e:
-            self._last_error = f"mmr: {type(e).__name__}: {e}"
-            logger.warning("RAG MMR lỗi, bỏ qua context: {}", e)
-            return RetrievalResult(RagStatus.RETRIEVAL_ERROR, detail=self._last_error)
+            return self._retrieval_failure("mmr", e)
         if not docs:
             return RetrievalResult(
                 RagStatus.NO_EVIDENCE, detail="Không có chunk nào khớp truy vấn."
@@ -713,9 +866,7 @@ class RAGService:
         try:
             results = vs.similarity_search_with_score(query, k=k)
         except Exception as e:
-            self._last_error = f"similarity_search_with_score: {type(e).__name__}: {e}"
-            logger.warning("RAG similarity_search_with_score lỗi, trả về rỗng: {}", e)
-            return RetrievalResult(RagStatus.RETRIEVAL_ERROR, detail=self._last_error)
+            return self._retrieval_failure("similarity_search_with_score", e)
         filtered = [(doc, score) for doc, score in results if score <= self.SCORE_THRESHOLD]
         if not filtered:
             return RetrievalResult(

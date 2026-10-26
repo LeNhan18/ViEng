@@ -39,6 +39,11 @@ class Settings(BaseSettings):
     rag_keep_old_indexes: int = 1
     # Số luồng tối đa cho embedding/OCR chạy đồng thời (chống nghẽn event loop).
     rag_max_concurrency: int = 2
+    # Distance metric của collection Chroma ("cosine" | "l2" | "ip").
+    # Để TRỐNG = dùng mặc định của Chroma (l2) và không ghi hnsw:space, giữ nguyên
+    # hành vi cũ — SCORE_THRESHOLD đang được chuẩn theo l2.
+    # Đổi giá trị này thì PHẢI reindex: index cũ sẽ bị từ chối với lý do rõ ràng.
+    rag_distance_metric: str = ""
 
     # Cache/temp dirs — để trống thì tự suy ra theo OS (xem app/core/paths.py).
     # Không hard-code ổ đĩa để chạy được cả Windows, Ubuntu và Docker.

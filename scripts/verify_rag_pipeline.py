@@ -22,7 +22,15 @@ from pathlib import Path
 # (overlayfs/tmpfs trong container) SQLite của ChromaDB ghi lặp lại ở /tmp sẽ lỗi
 # "attempt to write a readonly database".
 TMP = Path(os.environ.get("VERIFY_TMP") or ".rag-verify")
+# Dọn SẠCH trước khi chạy và kiểm tra là đã sạch: sót lại dữ liệu Chroma của lần
+# trước làm lần này fail "attempt to write a readonly database" ở một bước ngẫu
+# nhiên, nhìn như bug của code đang test. Thà dừng ngay với lý do rõ ràng.
 shutil.rmtree(TMP, ignore_errors=True)
+if TMP.exists():
+    sys.exit(
+        f"Không dọn được thư mục làm việc {TMP} (còn file đang bị giữ?). "
+        f"Xoá tay rồi chạy lại, hoặc đặt VERIFY_TMP sang thư mục khác."
+    )
 KB = TMP / "kb"; KB.mkdir(parents=True)
 (KB / "grammar.txt").write_text(
     "The present perfect tense is formed with have or has plus the past participle. "

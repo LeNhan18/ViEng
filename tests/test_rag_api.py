@@ -230,7 +230,17 @@ def test_search_returns_503_on_retrieval_error(client, monkeypatch):
 def test_search_returns_structured_sources_on_hit(client, monkeypatch):
     import app.services.rag_service as mod
 
-    docs = [(FakeDoc("Present perfect...", {"source": "grammar.txt", "page": 2}), 0.3)]
+    docs = [(
+        FakeDoc(
+            "The present perfect connects the past with the present moment.",
+            {
+                "source": "/kb/grammar.txt", "page": 2,
+                "doc_id": "grammar.txt", "chunk_id": "grammar.txt#2:0",
+                "section": "Tenses", "language": "en", "content_hash": "abc123def4567890",
+            },
+        ),
+        0.3,
+    )]
     monkeypatch.setattr(
         mod.rag_service, "retrieve_detailed",
         lambda q, k=3: RetrievalResult(
@@ -242,7 +252,74 @@ def test_search_returns_structured_sources_on_hit(client, monkeypatch):
     body = r.json()
     assert body["status"] == "ok"
     assert body["num_results"] == 1
-    assert body["sources"] == [{"source": "grammar.txt", "page": 2}]
+    # Nguồn có cấu trúc: ID ổn định để gán nhãn eval + đoạn bằng chứng, chứ không
+    # chỉ một đường dẫn tuyệt đối của máy build.
+    src = body["sources"][0]
+    assert src["doc_id"] == "grammar.txt"
+    assert src["chunk_id"] == "grammar.txt#2:0"
+    assert src["page"] == 2
+    assert src["section"] == "Tenses"
+    assert src["language"] == "en"
+    assert src["content_hash"] == "abc123def4567890"
+    assert src["score"] == 0.3
+    assert "present perfect" in src["evidence"].lower()
+    assert "index_version" in body
+
+
+def test_search_sources_tolerate_legacy_chunks_without_metadata(client, monkeypatch):
+    """Chunk của index cũ không có doc_id/chunk_id — API không được vỡ."""
+    import app.services.rag_service as mod
+
+    docs = [(FakeDoc("old chunk", {"source": "grammar.txt"}), None)]
+    monkeypatch.setattr(
+        mod.rag_service, "retrieve_detailed",
+        lambda q, k=3: RetrievalResult(RagStatus.OK, documents=docs, context="old chunk"),
+    )
+    r = client.post("/api/v1/rag/search", params={"query": "x"})
+    assert r.status_code == 200
+    src = r.json()["sources"][0]
+    assert src["doc_id"] is None and src["chunk_id"] is None
+    assert src["source"] == "grammar.txt"
+    assert src["evidence"] == "old chunk"
+
+
+def test_search_returns_503_when_index_incompatible(client, monkeypatch):
+    """Index build bằng model khác -> 503 + hướng dẫn reindex, không phải 200 rỗng."""
+    import app.services.rag_service as mod
+
+    monkeypatch.setattr(
+        mod.rag_service, "retrieve_detailed",
+        lambda q, k=3: RetrievalResult(
+            RagStatus.INDEX_INCOMPATIBLE, detail="model cũ != model mới"
+        ),
+    )
+    r = client.post("/api/v1/rag/search", params={"query": "x"})
+    assert r.status_code == 503
+    body = r.json()
+    assert body["status"] == "index_incompatible"
+    assert "/rag/index" in body["message"]
+    assert body["detail"]
+
+
+def test_ready_is_503_when_index_incompatible(client, monkeypatch):
+    """Index có mặt nhưng không khớp model -> readiness phải đỏ, kèm lý do."""
+    import app.services.rag_service as mod
+
+    monkeypatch.setattr(
+        mod.rag_service, "status",
+        lambda: {"status": "index_incompatible", "enabled": True, "ready": False,
+                 "embedder": "loaded", "embedding_model": "new-model",
+                 "last_error": "",
+                 "index": {"present": True, "version": "v1", "compatible": False,
+                           "incompatible_reason": "build bằng model old-model"}},
+    )
+    r = client.get("/api/v1/health/ready")
+    assert r.status_code == 503
+    check = r.json()["checks"]["rag"]
+    assert check["index_present"] is True
+    assert check["index_compatible"] is False
+    assert "old-model" in check["reason"]
+    assert check["index_version"] == "v1"
 
 
 # -------------------------------------------------------------- /rag/rollback
