@@ -28,3 +28,4 @@ class ChatMessage(Base):
     content: Mapped[str] = mapped_column(Text, nullable=False)
     sources: Mapped[str | None] = mapped_column(Text, nullable=True)  # JSON-serialized string of sources
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+

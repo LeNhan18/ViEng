@@ -193,6 +193,10 @@ export default function Chat() {
     const priorMessages = [...messages];
     setMessages([...priorMessages, userMsg]);
     performChatRequest(text, fileSnapshot, priorMessages);
+    
+    // const priorMessages =[...messages];
+    // setMessages([...priorMessages, userMsg]);
+    // performChatRequest(text,fileSnapshot, priorMessages);
 
     setInput("");
     setAttachedFile(null);
