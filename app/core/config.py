@@ -30,8 +30,31 @@ class Settings(BaseSettings):
     langfuse_host: str = ""
 
     chroma_persist_dir: str = "./data/vectorstore"
-    embedding_model: str = "sentence-transformers/models--BAAI--bge-m3"
+    # ID model trên HuggingFace Hub (KHÔNG phải đường dẫn thư mục cache).
+    # Trước đây mặc định là "sentence-transformers/models--BAAI--bge-m3" — đó là
+    # tên thư mục trong cache HF, không phải repo id, nên không resolve được.
+    embedding_model: str = "BAAI/bge-m3"
     rag_enabled: bool = True
+    # Số index cũ giữ lại sau khi reindex thành công (để rollback thủ công).
+    rag_keep_old_indexes: int = 1
+    # Số luồng tối đa cho embedding/OCR chạy đồng thời (chống nghẽn event loop).
+    rag_max_concurrency: int = 2
+    # Distance metric của collection Chroma ("cosine" | "l2" | "ip").
+    # Để TRỐNG = dùng mặc định của Chroma (l2) và không ghi hnsw:space, giữ nguyên
+    # hành vi cũ — SCORE_THRESHOLD đang được chuẩn theo l2.
+    # Đổi giá trị này thì PHẢI reindex: index cũ sẽ bị từ chối với lý do rõ ràng.
+    rag_distance_metric: str = ""
+
+    # Cache/temp dirs — để trống thì tự suy ra theo OS (xem app/core/paths.py).
+    # Không hard-code ổ đĩa để chạy được cả Windows, Ubuntu và Docker.
+    cache_dir: str = ""
+    ocr_temp_dir: str = ""
+    paddle_cache_dir: str = ""
+    hf_cache_dir: str = ""
+
+    # Khoá quản trị cho các thao tác index / xem kho tài liệu.
+    # Để trống = các endpoint quản trị bị chặn hoàn toàn (fail-closed).
+    admin_api_key: str = ""
 
     hf_model_name: str = ""
     use_finetuned_model: bool = False

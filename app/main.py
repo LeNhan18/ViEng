@@ -39,6 +39,10 @@ def _parse_cors_origins() -> tuple[list[str], bool]:
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    import asyncio
+
+    from fastapi.concurrency import run_in_threadpool
+
     await init_db()
     from app.services.rag_service import rag_service
 
@@ -46,8 +50,6 @@ async def lifespan(app: FastAPI):
     # (PaddleOCR load + JIT mất ~3-5s lần đầu). Chạy nền trong threadpool để
     # không block startup; nếu OCR_ENABLED=false thì skip.
     if settings.ocr_enabled:
-        import asyncio
-        from fastapi.concurrency import run_in_threadpool
         from app.services.ocr_service import ocr_service
 
         async def _warm_ocr():
@@ -63,14 +65,31 @@ async def lifespan(app: FastAPI):
         yield
         return
 
-    persist_path = Path(settings.chroma_persist_dir)
-    if not persist_path.exists() or not any(persist_path.iterdir()):
-        logger.info("No vectorstore yet; indexing knowledge base...")
-        count = rag_service.index_knowledge_base()
-        if count > 0:
-            logger.info(f"Indexed {count} chunks on startup")
-        else:
-            logger.warning("No documents in data/knowledge_base/ to index")
+    # Kiểm tra khởi động: báo rõ RAG đang ở trạng thái nào thay vì im lặng.
+    status = rag_service.status()
+    logger.info(
+        "RAG startup check: status={} embedder={} index_present={} model={}",
+        status["status"], status["embedder"], status["index"]["present"],
+        status["embedding_model"],
+    )
+
+    if not status["index"]["present"]:
+        # Index lần đầu chạy nền: build embedding mất vài phút, nếu block lifespan
+        # thì readiness probe không bao giờ xanh và k8s sẽ kill pod.
+        # /api/v1/health/ready trả not_ready cho tới khi index xong.
+        async def _index_bg():
+            logger.info("No vectorstore yet; indexing knowledge base in background...")
+            try:
+                count = await run_in_threadpool(rag_service.index_knowledge_base)
+            except Exception as e:
+                logger.error("Startup indexing thất bại: {}", e)
+                return
+            if count > 0:
+                logger.info(f"Indexed {count} chunks on startup")
+            else:
+                logger.warning("No documents in data/knowledge_base/ to index")
+
+        asyncio.create_task(_index_bg())
     else:
         logger.info("Vectorstore exists; skipping index")
     yield

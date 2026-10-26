@@ -64,3 +64,13 @@ pnpm-debug.log*
 
 # Eval reports
 evals/reports/
+
+# Thư mục làm việc của scripts/verify_rag_pipeline.py
+.rag-verify/
+.rag-verify-meta/
+
+# Patch/bundle xuất ra để chuyển nhánh giữa các phiên chạy (không commit vào repo)
+*.patch
+*.patch.eol
+*.bundle
+*.bundle.b64

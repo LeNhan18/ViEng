@@ -54,6 +54,7 @@ class OCRService:
         self._engine = None  # type: ignore[assignment]
         self._engine_ready = False
         self._engine_api: str = ""  # "predict" (3.x) hoặc "ocr" (2.x)
+        self._ocr_temp = None
 
     @property
     def enabled(self) -> bool:
@@ -63,17 +64,24 @@ class OCRService:
     def max_bytes(self) -> int:
         return self._max_bytes
 
+    def _temp_dir(self):
+        """Thư mục temp cho OCR, cache lại sau lần đầu resolve."""
+        if self._ocr_temp is None:
+            from app.core.paths import ocr_temp_dir
+            settings = get_settings()
+            self._ocr_temp = ocr_temp_dir(settings.ocr_temp_dir, settings.cache_dir)
+        return self._ocr_temp
+
     def _load_engine(self):
         """Lazy-load PPStructureV3. Tránh chi phí import lúc khởi động app."""
         if self._engine_ready:
             return self._engine
 
-        import os
-        # Cấu hình cache và temp directories để không tốn dung lượng ổ C:
-        os.makedirs('E:\\AI_CACHE\\paddle_ocr\\temp', exist_ok=True)
-        os.environ['TEMP'] = 'E:\\AI_CACHE\\paddle_ocr\\temp'
-        os.environ['TMP'] = 'E:\\AI_CACHE\\paddle_ocr\\temp'
-        os.environ['PADDLE_PDX_CACHE_HOME'] = 'E:\\AI_CACHE\\paddle_ocr'
+        # Cache/temp lấy từ cấu hình, không hard-code ổ đĩa — xem app/core/paths.py.
+        from app.core.paths import configure_ocr_env, paddle_cache_dir
+        configure_ocr_env(self._temp_dir(), paddle_cache_dir(
+            get_settings().paddle_cache_dir, get_settings().cache_dir
+        ))
 
         try:
             # Workaround conflict DLL trên Windows:
@@ -172,8 +180,7 @@ class OCRService:
         import tempfile
         temp_path = None
         try:
-            # Tạo file tạm trên ổ E:
-            with tempfile.NamedTemporaryFile(dir='E:\\AI_CACHE\\paddle_ocr\\temp', suffix='.png', delete=False) as tf:
+            with tempfile.NamedTemporaryFile(dir=str(self._temp_dir()), suffix='.png', delete=False) as tf:
                 tf.write(data)
                 temp_path = tf.name
 
@@ -258,8 +265,7 @@ class OCRService:
         import tempfile
         temp_path = None
         try:
-            # Tạo file tạm trên ổ E:
-            with tempfile.NamedTemporaryFile(dir='E:\\AI_CACHE\\paddle_ocr\\temp', suffix='.pdf', delete=False) as tf:
+            with tempfile.NamedTemporaryFile(dir=str(self._temp_dir()), suffix='.pdf', delete=False) as tf:
                 tf.write(data)
                 temp_path = tf.name
 
