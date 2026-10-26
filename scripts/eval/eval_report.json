@@ -1,0 +1,22 @@
+[
+  {
+    "question": "The train to New York _______ at 8 AM every morning.\nA. leave\nB. leaves\nC. is leaving\nD. will leave",
+    "scores": {
+      "accuracy_score": 5,
+      "tone_score": 5,
+      "format_score": 5,
+      "reasoning": "Câu trả lời thực tế giải thích chính xác về thì hiện tại đơn và chọn đúng đáp án. Giọng văn thân thiện, gần gũi và định dạng rõ ràng, dễ đọc.",
+      "actual_answer": "Em oi, câu hỏi này là một câu hỏi về thì trong tiếng Anh. Chúng ta có câu: \"The train to New York _______ at 8 AM every morning.\" \n\nKhi nhìn vào các đáp án, chúng ta cần chọn một động từ phù hợp với ngữ cảnh của câu. Chúng ta có các lựa chọn như sau:\n\nA. leave - dạng nguyên thể, không phù hợp trong câu này.\nB. leaves - đây là dạng hiện tại đơn, phù hợp với thói quen hoặc lịch trình.\nC. is leaving - thì hiện tại tiếp diễn, thường dùng cho hành động đang diễn ra tại thời điểm nói, không phù hợp ở đây.\nD. will leave - thì tương lai đơn, không phù hợp vì câu đang nói về thói quen hàng ngày.\n\nVậy đáp án đúng là **B. leaves**. \n\nMẹo ghi nhớ: Khi nói về một hành động xảy ra thường xuyên hoặc theo lịch trình cố định (như giờ tàu chạy), chúng ta thường dùng thì hiện tại đơn (động từ thêm \"s\" ở ngôi số ít). \n\nHy vọng em hiểu bài này nhé! Nếu có câu hỏi nào khác, đừng ngần ngại hỏi thầy cô nhé!"
+    }
+  },
+  {
+    "question": "By the end of this year, I ________ English for three years.\nA. will have studied\nB. am studying\nC. have studied\nD. will study",
+    "scores": {
+      "accuracy_score": 5,
+      "tone_score": 5,
+      "format_score": 5,
+      "reasoning": "Câu trả lời thực tế giải thích chính xác về thì tương lai hoàn thành và chọn đúng đáp án. Giọng văn thân thiện, gần gũi và dễ hiểu. Định dạng rõ ràng, dễ đọc.",
+      "actual_answer": "Em ơi, câu hỏi TOEIC này rất hay và mình cùng phân tích nhé! \n\nCâu hỏi nói rằng \"By the end of this year, I ________ English for three years.\" có nghĩa là \"Đến cuối năm nay, tôi sẽ học tiếng Anh được ba năm.\" \n\nChúng ta cần chọn một thì phù hợp để diễn tả hành động học tiếng Anh trong một khoảng thời gian cụ thể. Hãy xem từng lựa chọn:\n\nA. **will have studied** - Đây là thì tương lai hoàn thành, được dùng để nói về một hành động sẽ hoàn thành trước một thời điểm trong tương lai. Trong trường hợp này, đến cuối năm nay, hành động học tiếng Anh sẽ hoàn thành được ba năm. Đây chính là đáp án đúng!\n\nB. **am studying** - Đây là thì hiện tại tiếp diễn, chỉ hành động đang diễn ra tại thời điểm hiện tại. Câu này không phù hợp vì chúng ta đang nói về tương lai.\n\nC. **have studied** - Đây là thì hiện tại hoàn thành, chỉ hành động đã xảy ra và có liên quan đến hiện tại. Tuy nhiên, nó không phù hợp với cụm \"by the end of this year\".\n\nD. **will study** - Đây là thì tương lai đơn, chỉ hành động sẽ xảy ra trong tương lai nhưng không nói đến việc đã học trong một khoảng thời gian cụ thể.\n\nVậy nên, đáp án đúng là **A. will have studied**. \n\nMẹo ghi nhớ: Khi thấy cụm từ \"by the end of...,\" hãy nghĩ ngay đến thì tương lai hoàn thành nhé! Chúc em học tốt và làm bài thật tốt trong kỳ thi!"
+    }
+  }
+]
